@@ -300,8 +300,9 @@ def convert_to_palette(image: Image.Image, palette: List[int]) -> bytes:
 
 def create_wad_header(num_textures: int, directory_offset: int) -> bytes:
     """Create WAD file header"""
-    # WAD3 format: magic (4 bytes), num_textures (4 bytes), directory_offset (4 bytes)
-    return struct.pack('<4sII', b'WAD3', num_textures, directory_offset)
+    # WAD2 format (Quake): magic (4 bytes), num_textures (4 bytes), directory_offset (4 bytes)
+    # WAD3 is for Half-Life, WAD2 is for Quake
+    return struct.pack('<4sII', b'WAD2', num_textures, directory_offset)
 
 
 def create_texture_entry(name: str, width: int, height: int, data: bytes, offset: int) -> Tuple[bytes, bytes]:
@@ -342,20 +343,18 @@ def create_texture_entry(name: str, width: int, height: int, data: bytes, offset
         mip3_offset
     )
     
-    # Palette data (2 bytes for palette size + palette)
-    palette_size = struct.pack('<H', 256)
-    palette_data = bytes(QUAKE_PALETTE)
+    # For WAD2 (Quake), we don't include palette data with each texture
+    # The Quake palette is assumed to be known
+    # Complete texture data (NO palette for WAD2)
+    texture_data = texture_header + mip0 + mip1 + mip2 + mip3
     
-    # Complete texture data
-    texture_data = texture_header + mip0 + mip1 + mip2 + mip3 + palette_size + palette_data
-    
-    # Directory entry (WAD3 format)
+    # Directory entry (WAD2 format)
     # Offset (4), DiskSize (4), Size (4), Type (1), Compression (1), Padding (2), Name (16)
     directory_entry = struct.pack('<IIIBBB',
         offset,  # File position
         len(texture_data),  # Size on disk
         len(texture_data),  # Size when uncompressed
-        0x43,  # Type (0x43 = miptex)
+        0x44,  # Type (0x44 = QPIC/miptex for WAD2, 0x43 is for WAD3)
         0,     # Compression (0 = none)
         0      # Padding byte 1
     ) + struct.pack('<B', 0) + texture_name  # Padding byte 2 + texture name
@@ -435,21 +434,35 @@ def extract_textures_from_bsp(bsp_path: str) -> List[Tuple[str, int, int, bytes]
     
     try:
         with open(bsp_path, 'rb') as f:
-            # Read BSP version
-            version = struct.unpack('<I', f.read(4))[0]
+            # Read first 4 bytes to check format
+            magic = f.read(4)
             
-            # Support for BSP versions 29 (Quake) and 30 (Half-Life/GoldSrc)
-            if version not in [29, 30]:
-                print(f"Warning: Unknown BSP version {version}, attempting to parse anyway...")
-            
-            # Read texture lump info (lump 2 for Quake, varies for Half-Life)
-            # For GoldSrc BSP30, texture lump is at offset 4 + lump_index * 8
-            # Lump 2 is textures for BSP29, lump 2 is also textures for BSP30
-            lump_offset = 4 + 2 * 8  # Version (4 bytes) + lump index (2) * 8 bytes per lump entry
-            f.seek(lump_offset)
-            
-            tex_offset = struct.unpack('<I', f.read(4))[0]
-            tex_length = struct.unpack('<I', f.read(4))[0]
+            # Check if it's BSP2 format (modern extended format)
+            if magic == b'BSP2':
+                # BSP2 format - uses 8-byte lump entries (offset + length as 32-bit ints)
+                bsp2_version = struct.unpack('<I', f.read(4))[0]
+                print(f"BSP2 format detected (version {bsp2_version})")
+                # BSP2: Magic (4) + version (4) + 47 lumps * 8 bytes each
+                # Lump 2 is still the texture lump
+                lump_offset = 8 + 2 * 8  # Skip to lump 2
+                f.seek(lump_offset)
+                tex_offset = struct.unpack('<I', f.read(4))[0]
+                tex_length = struct.unpack('<I', f.read(4))[0]
+            else:
+                # Traditional BSP format (BSP29/BSP30) - first 4 bytes are version number
+                f.seek(0)
+                version = struct.unpack('<I', f.read(4))[0]
+                
+                # Support for BSP versions 29 (Quake) and 30 (Half-Life/GoldSrc)
+                if version not in [29, 30]:
+                    print(f"Warning: Unknown BSP version {version}, attempting to parse anyway...")
+                
+                # Read texture lump info (lump 2 for Quake/Half-Life)
+                lump_offset = 4 + 2 * 8  # Version (4 bytes) + lump index (2) * 8 bytes per lump entry
+                f.seek(lump_offset)
+                
+                tex_offset = struct.unpack('<I', f.read(4))[0]
+                tex_length = struct.unpack('<I', f.read(4))[0]
             
             if tex_offset == 0 or tex_length == 0:
                 print(f"No texture data found in BSP file")

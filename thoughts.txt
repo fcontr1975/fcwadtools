@@ -39,3 +39,9 @@ Quake game source
 
 Quake installation folder
 /mnt/data3/Games/Quake/
+
+Ok, I tested the generated .wad (/mnt/data3/Games/Quake/tools/fcwadtools/quakerooms.wad) in TrenchBroom and I could link the generated .wad file to my .map file, it did not complain or issue any errors, but I could not see the images in the texture picker. However, I then opened the .wad file in the texmex windows wad extractor application and that DID show the images and also did not complain! I saved it from there (/mnt/data3/Games/Quake/fcarch/maps/quakerooms.wad) and it also saved ok. So whatever texmex did to the file, fixed it! Can you compare the 2 files and see what TexMex did? That may lead us to generating a completely quake-correct file. 
+
+/mnt/data3/Games/Quake/tools/fcwadtools/quakerooms.wad
+/mnt/data3/Games/Quake/fcarch/maps/quakerooms.wad
+
