@@ -1,0 +1,39 @@
+Ok, we want to create a set of graphic tools for Quake from id software.
+
+Our script named wadtools.py should be created in Python.
+
+It should accept the following command line arguments:
+
+wadtools.py command line help:
+
+Usage: python3 wadtools.py --input [file, folder or compiled bsp] --output [filename or blank for automatic name] --dithering: 0-3 (optional) --alpha 0/1
+
+-i: (or) --input: $wadfile / $folder / $filelist
+  The script should accept the following as inputs: 
+    - A folder containing images (it should accept png and jpg as well as any image formats that the wad tools themselves accept)
+
+--dithering: 0/1 (optional)
+  The script should default to Floyd-Steinberg dithering (0) or ordered dithering (1)
+
+--alpha: 0/1/2 (optional)
+  The script should default to clipped alpha (0), dithered alpha (1) or all alpha treated as a color (3)
+
+--alphadither: 0/1 (optional)
+  Used with --alpha 1. The script should default to Floyd-Steinberg dithering (0) or ordered dithering (1)
+
+--alphacolor: #XXXXXX (optional)
+  Used with --alpha 2. Should default to #000000, but any color in the format #XXXXXX is acceptable, the script should select the closest color from the Quake palette. 
+
+--output $wadname (optional)
+  The script defaults to either the folder name or the wad name unless overridden by the user.
+
+Some useful references that you may need access to:
+
+ericw's quake compilation tools
+/home/federico-contreras/Repos/ericw-tools/
+
+Quake game source
+/home/federico-contreras/Repos/Quake/
+
+Quake installation folder
+/mnt/data3/Games/Quake/
