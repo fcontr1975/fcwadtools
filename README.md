@@ -1,15 +1,18 @@
 # Quake WAD Tools
 
-A Python utility for converting images to Quake WAD (Where's All the Data) format and extracting textures from BSP files.
+A Python utility for converting images to/from Quake WAD (Where's All the Data) format.
 
 ## Features
 
-- Convert PNG, JPG, BMP, TGA, and other image formats to Quake WAD format
-- Extract textures from Quake/Half-Life BSP files (BSP versions 29 and 30)
-- Support for Floyd-Steinberg and ordered (Bayer matrix) dithering
-- Multiple alpha channel handling modes (clipped, dithered, or color replacement)
-- Automatic mipmap generation
-- Batch processing of folders
+- **Convert images to WAD**: PNG, JPG, BMP, TGA, and other image formats to Quake WAD format
+- **Extract textures from WAD**: Export all textures from WAD files to lossless PNG images
+- **Extract textures from BSP**: Extract embedded textures from Quake/Half-Life BSP files (BSP versions 29 and 30)
+- **WAD2 and WAD3 support**: Create Quake (WAD2) or Half-Life (WAD3) format files
+- **QPIC support**: Extract UI graphics (type 0x42) from WAD files
+- **Dithering options**: Floyd-Steinberg and ordered (Bayer matrix) dithering
+- **Alpha channel handling**: Multiple modes (clipped, dithered, or color replacement)
+- **Automatic mipmap generation**: For texture WAD files
+- **Batch processing**: Process entire folders of images
 
 ## Installation
 
@@ -30,6 +33,8 @@ pip install Pillow
 
 ### Basic Usage
 
+**Convert images to WAD:**
+
 Convert a single image:
 ```bash
 python3 wadtools.py --input texture.png
@@ -40,6 +45,20 @@ Convert all images in a folder:
 python3 wadtools.py --input /path/to/textures/
 ```
 
+**Extract textures from WAD:**
+
+Extract all textures from a WAD file to PNG images:
+```bash
+python3 wadtools.py --input textures.wad
+```
+
+Extract to a custom directory:
+```bash
+python3 wadtools.py --input textures.wad --output custom_folder
+```
+
+**Extract textures from BSP:**
+
 Extract textures from a BSP file:
 ```bash
 python3 wadtools.py --input map.bsp
@@ -48,11 +67,16 @@ python3 wadtools.py --input map.bsp
 ### Command Line Options
 
 **Required:**
-- `-i, --input`: Input file, folder, or BSP file
+- `-i, --input`: Input file or folder (images/WAD/BSP)
 
 **Optional:**
-- `--output`: Output WAD filename (auto-generated if not specified)
-- `--dithering`: Dithering mode
+- `--output`: Output filename or directory
+  - For image→WAD: Output WAD filename (auto-generated if not specified)
+  - For WAD→PNG: Output directory (defaults to WAD filename without extension)
+- `--type`: WAD format type (for image→WAD conversion)
+  - `2`: WAD2 format for Quake (default)
+  - `3`: WAD3 format for Half-Life (includes palette data)
+- `--dithering`: Dithering mode (for image→WAD conversion)
   - `0`: Floyd-Steinberg dithering (default)
   - `1`: Ordered (Bayer matrix) dithering
 - `--alpha`: Alpha channel handling mode
@@ -66,6 +90,11 @@ python3 wadtools.py --input map.bsp
   - Format: `#RRGGBB` (default: `#000000`)
 
 ### Examples
+
+Create a WAD3 file for Half-Life:
+```bash
+python3 wadtools.py --input textures/ --type 3
+```
 
 Convert with ordered dithering:
 ```bash

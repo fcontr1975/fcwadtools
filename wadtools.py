@@ -298,14 +298,15 @@ def convert_to_palette(image: Image.Image, palette: List[int]) -> bytes:
     return bytes(indices)
 
 
-def create_wad_header(num_textures: int, directory_offset: int) -> bytes:
+def create_wad_header(num_textures: int, directory_offset: int, wad_type: int = 2) -> bytes:
     """Create WAD file header"""
     # WAD2 format (Quake): magic (4 bytes), num_textures (4 bytes), directory_offset (4 bytes)
-    # WAD3 is for Half-Life, WAD2 is for Quake
-    return struct.pack('<4sII', b'WAD2', num_textures, directory_offset)
+    # WAD3 format (Half-Life): same structure but different magic and includes palettes
+    magic = b'WAD2' if wad_type == 2 else b'WAD3'
+    return struct.pack('<4sII', magic, num_textures, directory_offset)
 
 
-def create_texture_entry(name: str, width: int, height: int, data: bytes, offset: int) -> Tuple[bytes, bytes]:
+def create_texture_entry(name: str, width: int, height: int, data: bytes, offset: int, wad_type: int = 2) -> Tuple[bytes, bytes]:
     """Create texture data and directory entry"""
     # Ensure name is 16 bytes (null-padded)
     texture_name = name[:15].encode('ascii')
@@ -343,18 +344,26 @@ def create_texture_entry(name: str, width: int, height: int, data: bytes, offset
         mip3_offset
     )
     
-    # For WAD2 (Quake), we don't include palette data with each texture
-    # The Quake palette is assumed to be known
-    # Complete texture data (NO palette for WAD2)
-    texture_data = texture_header + mip0 + mip1 + mip2 + mip3
+    # WAD2 (Quake) doesn't include palette data with each texture
+    # WAD3 (Half-Life) includes palette data after the mipmaps
+    if wad_type == 3:
+        # For WAD3, add palette data (2 bytes for palette size + palette)
+        palette_size = struct.pack('<H', 256)
+        palette_data = bytes(QUAKE_PALETTE)
+        texture_data = texture_header + mip0 + mip1 + mip2 + mip3 + palette_size + palette_data
+        type_byte = 0x43  # Type for WAD3 miptex
+    else:
+        # For WAD2, no palette data
+        texture_data = texture_header + mip0 + mip1 + mip2 + mip3
+        type_byte = 0x44  # Type for WAD2 miptex
     
-    # Directory entry (WAD2 format)
+    # Directory entry
     # Offset (4), DiskSize (4), Size (4), Type (1), Compression (1), Padding (2), Name (16)
     directory_entry = struct.pack('<IIIBBB',
         offset,  # File position
         len(texture_data),  # Size on disk
         len(texture_data),  # Size when uncompressed
-        0x44,  # Type (0x44 = QPIC/miptex for WAD2, 0x43 is for WAD3)
+        type_byte,  # Type (0x44 for WAD2, 0x43 for WAD3)
         0,     # Compression (0 = none)
         0      # Padding byte 1
     ) + struct.pack('<B', 0) + texture_name  # Padding byte 2 + texture name
@@ -362,7 +371,7 @@ def create_texture_entry(name: str, width: int, height: int, data: bytes, offset
     return texture_data, directory_entry
 
 
-def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str):
+def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str, wad_type: int = 2):
     """Create a WAD file from texture data"""
     # Calculate offsets
     header_size = 12
@@ -372,7 +381,7 @@ def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str):
     directory_entries = []
     
     for name, width, height, data in textures:
-        texture_data, directory_entry = create_texture_entry(name, width, height, data, current_offset)
+        texture_data, directory_entry = create_texture_entry(name, width, height, data, current_offset, wad_type)
         texture_data_list.append(texture_data)
         directory_entries.append(directory_entry)
         current_offset += len(texture_data)
@@ -383,7 +392,7 @@ def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str):
     # Write WAD file
     with open(output_path, 'wb') as f:
         # Write header
-        f.write(create_wad_header(len(textures), directory_offset))
+        f.write(create_wad_header(len(textures), directory_offset, wad_type))
         
         # Write texture data
         for texture_data in texture_data_list:
@@ -393,7 +402,8 @@ def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str):
         for directory_entry in directory_entries:
             f.write(directory_entry)
     
-    print(f"Created WAD file: {output_path} with {len(textures)} texture(s)")
+    wad_format = "WAD2 (Quake)" if wad_type == 2 else "WAD3 (Half-Life)"
+    print(f"Created {wad_format} file: {output_path} with {len(textures)} texture(s)")
 
 
 def process_image(image_path: str, dithering: int, alpha_mode: int, 
@@ -540,16 +550,180 @@ def find_images(input_path: str) -> List[str]:
     return sorted(image_files)
 
 
+def palette_to_image(width: int, height: int, palette_data: bytes, palette: List[int], has_embedded_palette: bool = False) -> Image.Image:
+    """Convert palette indices to RGB image"""
+    img = Image.new('RGB', (width, height))
+    pixels = img.load()
+    
+    # If the texture has an embedded palette (WAD3), use it instead
+    if has_embedded_palette and len(palette_data) > width * height:
+        # Extract embedded palette from the end of the data
+        embedded_palette_start = width * height
+        embedded_palette = list(palette_data[embedded_palette_start:embedded_palette_start + 768])
+        palette = embedded_palette if len(embedded_palette) == 768 else palette
+        # Use only the texture data
+        palette_data = palette_data[:width * height]
+    
+    for y in range(height):
+        for x in range(width):
+            index = palette_data[y * width + x]
+            r = palette[index * 3]
+            g = palette[index * 3 + 1]
+            b = palette[index * 3 + 2]
+            pixels[x, y] = (r, g, b)
+    
+    return img
+
+
+def extract_textures_from_wad(wad_path: str, output_dir: str = None) -> int:
+    """Extract textures from a WAD file and save as PNG images"""
+    if output_dir is None:
+        # Default to WAD filename without extension
+        output_dir = Path(wad_path).stem
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    extracted_count = 0
+    
+    try:
+        with open(wad_path, 'rb') as f:
+            # Read WAD header
+            magic = f.read(4)
+            if magic not in [b'WAD2', b'WAD3']:
+                print(f"Error: Not a valid WAD file (magic: {magic})")
+                return 0
+            
+            wad_type = 2 if magic == b'WAD2' else 3
+            print(f"Reading {magic.decode('ascii')} file: {wad_path}")
+            
+            num_textures = struct.unpack('<I', f.read(4))[0]
+            directory_offset = struct.unpack('<I', f.read(4))[0]
+            
+            print(f"Found {num_textures} texture(s)")
+            
+            # Read directory entries
+            f.seek(directory_offset)
+            textures = []
+            
+            for i in range(num_textures):
+                offset = struct.unpack('<I', f.read(4))[0]
+                disk_size = struct.unpack('<I', f.read(4))[0]
+                size = struct.unpack('<I', f.read(4))[0]
+                type_byte = struct.unpack('<B', f.read(1))[0]
+                compression = struct.unpack('<B', f.read(1))[0]
+                padding = struct.unpack('<H', f.read(2))[0]
+                name_bytes = f.read(16)
+                name = name_bytes.split(b'\x00')[0].decode('ascii', errors='ignore')
+                
+                textures.append((name, offset, disk_size, type_byte))
+            
+            # Extract each texture
+            for name, offset, disk_size, type_byte in textures:
+                try:
+                    f.seek(offset)
+                    
+                    # Check texture type
+                    if type_byte == 0x42:
+                        # QPIC format (UI graphics) - different structure
+                        # QPIC: width (4), height (4), data (width*height)
+                        width = struct.unpack('<I', f.read(4))[0]
+                        height = struct.unpack('<I', f.read(4))[0]
+                        
+                        # Validate dimensions
+                        if width <= 0 or height <= 0 or width > 4096 or height > 4096:
+                            print(f"  Skipped: {name} (invalid QPIC dimensions: {width}x{height})")
+                            continue
+                        
+                        data_size = width * height
+                        texture_data = f.read(data_size)
+                        palette = QUAKE_PALETTE
+                        
+                    elif type_byte in [0x43, 0x44]:
+                        # Miptex format (textures) - standard mipmap structure
+                        # Read texture header
+                        name_bytes = f.read(16)
+                        width = struct.unpack('<I', f.read(4))[0]
+                        height = struct.unpack('<I', f.read(4))[0]
+                        
+                        # Validate dimensions
+                        if width <= 0 or height <= 0 or width > 4096 or height > 4096:
+                            print(f"  Skipped: {name} (invalid dimensions: {width}x{height})")
+                            continue
+                        
+                        mip0_offset = struct.unpack('<I', f.read(4))[0]
+                        mip1_offset = struct.unpack('<I', f.read(4))[0]
+                        mip2_offset = struct.unpack('<I', f.read(4))[0]
+                        mip3_offset = struct.unpack('<I', f.read(4))[0]
+                        
+                        # Validate mipmap offset
+                        if mip0_offset == 0 or mip0_offset > disk_size:
+                            print(f"  Skipped: {name} (invalid mipmap offset)")
+                            continue
+                        
+                        # Read mipmap 0 data (full resolution)
+                        f.seek(offset + mip0_offset)
+                        data_size = width * height
+                        
+                        # For WAD3, also read palette if present
+                        if type_byte == 0x43:  # WAD3 format
+                            # Calculate position of palette (after all mipmaps)
+                            mip1_size = (width // 2) * (height // 2)
+                            mip2_size = (width // 4) * (height // 4)
+                            mip3_size = (width // 8) * (height // 8)
+                            palette_pos = offset + mip3_offset + mip3_size
+                            
+                            # Read texture data
+                            texture_data = f.read(data_size)
+                            
+                            # Read embedded palette
+                            f.seek(palette_pos)
+                            palette_size_marker = struct.unpack('<H', f.read(2))[0]
+                            if palette_size_marker == 256:
+                                embedded_palette = list(f.read(768))
+                                palette = embedded_palette
+                            else:
+                                palette = QUAKE_PALETTE
+                        else:
+                            texture_data = f.read(data_size)
+                            palette = QUAKE_PALETTE
+                    else:
+                        print(f"  Skipped: {name} (unknown type: 0x{type_byte:02x})")
+                        continue
+                    
+                    # Convert to image
+                    img = palette_to_image(width, height, texture_data, palette)
+                    
+                    # Save as PNG
+                    output_file = output_path / f"{name}.png"
+                    img.save(output_file, 'PNG')
+                    print(f"  Saved: {output_file} ({width}x{height})")
+                    extracted_count += 1
+                    
+                except Exception as e:
+                    print(f"  Error extracting {name}: {e}")
+                    continue
+    
+    except Exception as e:
+        print(f"Error extracting from WAD file: {e}")
+        import traceback
+        traceback.print_exc()
+        return extracted_count
+    
+    print(f"\nExtracted {extracted_count} texture(s) to: {output_path}")
+    return extracted_count
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Quake WAD Tools - Convert images to Quake WAD format',
+        description='Quake WAD Tools - Convert images to/from Quake WAD format',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
     parser.add_argument('-i', '--input', required=True,
-                       help='Input file, folder, or file list')
+                       help='Input file or folder (images/WAD/BSP)')
     parser.add_argument('--output', default='',
-                       help='Output WAD filename (optional, auto-generated if not specified)')
+                       help='Output filename or directory (optional, auto-generated if not specified)')
     parser.add_argument('--dithering', type=int, choices=[0, 1], default=0,
                        help='Dithering mode: 0=Floyd-Steinberg (default), 1=Ordered')
     parser.add_argument('--alpha', type=int, choices=[0, 1, 2], default=0,
@@ -558,6 +732,8 @@ def main():
                        help='Alpha dithering (for --alpha 1): 0=Floyd-Steinberg (default), 1=Ordered')
     parser.add_argument('--alphacolor', default='#000000',
                        help='Alpha replacement color (for --alpha 2): hex format #RRGGBB (default: #000000)')
+    parser.add_argument('--type', type=int, choices=[2, 3], default=2,
+                       help='WAD format type: 2=WAD2/Quake (default), 3=WAD3/Half-Life')
     
     args = parser.parse_args()
     
@@ -568,8 +744,16 @@ def main():
         print(f"Error: Invalid alpha color format: {args.alphacolor}")
         return 1
     
-    # Check if input is a BSP file
+    # Check if input is a WAD file (extract mode)
     input_path = Path(args.input)
+    
+    if input_path.is_file() and input_path.suffix.lower() == '.wad':
+        # Extract textures from WAD file to PNG images
+        output_dir = args.output if args.output else None
+        extracted = extract_textures_from_wad(args.input, output_dir)
+        return 0 if extracted > 0 else 1
+    
+    # Check if input is a BSP file
     textures = []
     
     if input_path.is_file() and input_path.suffix.lower() == '.bsp':
@@ -612,7 +796,7 @@ def main():
         output_path += '.wad'
     
     # Create WAD file
-    create_wad(textures, output_path)
+    create_wad(textures, output_path, args.type)
     
     return 0
 
