@@ -349,15 +349,16 @@ def create_texture_entry(name: str, width: int, height: int, data: bytes, offset
     # Complete texture data
     texture_data = texture_header + mip0 + mip1 + mip2 + mip3 + palette_size + palette_data
     
-    # Directory entry
-    directory_entry = struct.pack('<II16sBBH',
+    # Directory entry (WAD3 format)
+    # Offset (4), DiskSize (4), Size (4), Type (1), Compression (1), Padding (2), Name (16)
+    directory_entry = struct.pack('<IIIBBB',
         offset,  # File position
-        len(texture_data),  # Size in WAD
+        len(texture_data),  # Size on disk
         len(texture_data),  # Size when uncompressed
         0x43,  # Type (0x43 = miptex)
         0,     # Compression (0 = none)
-        0      # Padding
-    ) + texture_name
+        0      # Padding byte 1
+    ) + struct.pack('<B', 0) + texture_name  # Padding byte 2 + texture name
     
     return texture_data, directory_entry
 
@@ -428,6 +429,86 @@ def process_image(image_path: str, dithering: int, alpha_mode: int,
         return None
 
 
+def extract_textures_from_bsp(bsp_path: str) -> List[Tuple[str, int, int, bytes]]:
+    """Extract textures from a Quake/Half-Life BSP file"""
+    textures = []
+    
+    try:
+        with open(bsp_path, 'rb') as f:
+            # Read BSP version
+            version = struct.unpack('<I', f.read(4))[0]
+            
+            # Support for BSP versions 29 (Quake) and 30 (Half-Life/GoldSrc)
+            if version not in [29, 30]:
+                print(f"Warning: Unknown BSP version {version}, attempting to parse anyway...")
+            
+            # Read texture lump info (lump 2 for Quake, varies for Half-Life)
+            # For GoldSrc BSP30, texture lump is at offset 4 + lump_index * 8
+            # Lump 2 is textures for BSP29, lump 2 is also textures for BSP30
+            lump_offset = 4 + 2 * 8  # Version (4 bytes) + lump index (2) * 8 bytes per lump entry
+            f.seek(lump_offset)
+            
+            tex_offset = struct.unpack('<I', f.read(4))[0]
+            tex_length = struct.unpack('<I', f.read(4))[0]
+            
+            if tex_offset == 0 or tex_length == 0:
+                print(f"No texture data found in BSP file")
+                return textures
+            
+            # Read texture data
+            f.seek(tex_offset)
+            num_textures = struct.unpack('<I', f.read(4))[0]
+            
+            print(f"Found {num_textures} texture(s) in BSP file")
+            
+            # Read texture offsets
+            tex_offsets = []
+            for i in range(num_textures):
+                offset = struct.unpack('<I', f.read(4))[0]
+                tex_offsets.append(offset)
+            
+            # Read each texture
+            for i, offset in enumerate(tex_offsets):
+                if offset == -1 or offset == 0xFFFFFFFF:
+                    # External texture reference
+                    continue
+                
+                f.seek(tex_offset + offset)
+                
+                # Read texture header (miptex structure)
+                name_bytes = f.read(16)
+                name = name_bytes.split(b'\x00')[0].decode('ascii', errors='ignore')
+                
+                width = struct.unpack('<I', f.read(4))[0]
+                height = struct.unpack('<I', f.read(4))[0]
+                
+                mip0_offset = struct.unpack('<I', f.read(4))[0]
+                mip1_offset = struct.unpack('<I', f.read(4))[0]
+                mip2_offset = struct.unpack('<I', f.read(4))[0]
+                mip3_offset = struct.unpack('<I', f.read(4))[0]
+                
+                # Read mipmap 0 data (full resolution)
+                if mip0_offset > 0:
+                    f.seek(tex_offset + offset + mip0_offset)
+                    data_size = width * height
+                    palette_data = f.read(data_size)
+                    
+                    if len(palette_data) == data_size:
+                        textures.append((name, width, height, palette_data))
+                        print(f"  Extracted: {name} ({width}x{height})")
+                    else:
+                        print(f"  Warning: Incomplete data for texture {name}")
+                else:
+                    print(f"  Warning: No mipmap data for texture {name}")
+    
+    except Exception as e:
+        print(f"Error reading BSP file: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return textures
+
+
 def find_images(input_path: str) -> List[str]:
     """Find all image files in the input path"""
     image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tga', '.tif', '.tiff'}
@@ -474,22 +555,30 @@ def main():
         print(f"Error: Invalid alpha color format: {args.alphacolor}")
         return 1
     
-    # Find input images
-    image_files = find_images(args.input)
-    
-    if not image_files:
-        print(f"Error: No images found in {args.input}")
-        return 1
-    
-    print(f"Found {len(image_files)} image(s) to process")
-    
-    # Process images
+    # Check if input is a BSP file
+    input_path = Path(args.input)
     textures = []
-    for image_file in image_files:
-        print(f"Processing: {image_file}")
-        result = process_image(image_file, args.dithering, args.alpha, args.alphadither, alpha_color)
-        if result:
-            textures.append(result)
+    
+    if input_path.is_file() and input_path.suffix.lower() == '.bsp':
+        # Extract textures from BSP file
+        print(f"Extracting textures from BSP file: {args.input}")
+        textures = extract_textures_from_bsp(args.input)
+    else:
+        # Find input images
+        image_files = find_images(args.input)
+        
+        if not image_files:
+            print(f"Error: No images found in {args.input}")
+            return 1
+        
+        print(f"Found {len(image_files)} image(s) to process")
+        
+        # Process images
+        for image_file in image_files:
+            print(f"Processing: {image_file}")
+            result = process_image(image_file, args.dithering, args.alpha, args.alphadither, alpha_color)
+            if result:
+                textures.append(result)
     
     if not textures:
         print("Error: No textures were successfully processed")

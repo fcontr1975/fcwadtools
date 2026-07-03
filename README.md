@@ -1,10 +1,11 @@
 # Quake WAD Tools
 
-A Python utility for converting images to Quake WAD (Where's All the Data) format.
+A Python utility for converting images to Quake WAD (Where's All the Data) format and extracting textures from BSP files.
 
 ## Features
 
 - Convert PNG, JPG, BMP, TGA, and other image formats to Quake WAD format
+- Extract textures from Quake/Half-Life BSP files (BSP versions 29 and 30)
 - Support for Floyd-Steinberg and ordered (Bayer matrix) dithering
 - Multiple alpha channel handling modes (clipped, dithered, or color replacement)
 - Automatic mipmap generation
@@ -39,10 +40,15 @@ Convert all images in a folder:
 python3 wadtools.py --input /path/to/textures/
 ```
 
+Extract textures from a BSP file:
+```bash
+python3 wadtools.py --input map.bsp
+```
+
 ### Command Line Options
 
 **Required:**
-- `-i, --input`: Input file or folder containing images
+- `-i, --input`: Input file, folder, or BSP file
 
 **Optional:**
 - `--output`: Output WAD filename (auto-generated if not specified)
