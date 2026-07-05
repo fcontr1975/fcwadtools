@@ -4,7 +4,7 @@ Our script named wadtools.py should be created in Python.
 
 It should accept the following command line arguments:
 
-wadtools.py command line help:
+fcwadtool.py command line help:
 
 Usage: python3 wadtools.py --input [file, folder or compiled bsp] --output [filename or blank for automatic name] --dithering: 0-3 (optional) --alpha 0/1
 

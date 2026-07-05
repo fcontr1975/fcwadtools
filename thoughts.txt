@@ -53,5 +53,4 @@ Let's add another command line arg:
 --type: 2/3
   Defaults to 2, this is is the wad type (BSP2 / BSP3) that the tool will generate.
 
-
 Let's add a mode: If the --input file is a .wad file, let's save out lossless PNGs of all the graphics in that wad file into a subfolder (by default named the same as the wad file without the .wad extension).
