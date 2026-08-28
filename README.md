@@ -1,18 +1,44 @@
 # Quake WAD Tools
 
-A Python utility for converting images to/from Quake WAD (Where's All the Data) format.
+A Python utility for converting images to/from Quake WAD (Where's All the Data) format, with both command-line and graphical interfaces.
+
+## Tools Included
+
+### fcwadtool.py - Command-Line Tool
+A command-line utility for converting images to/from WAD format and extracting textures from BSP files.
+
+### fcwadeditor.py - Graphical Editor (NEW!)
+A full-featured graphical application for viewing and editing WAD files with a user-friendly interface.
 
 ## Features
 
+### Command-Line Tool (fcwadtool.py)
 - **Convert images to WAD**: PNG, JPG, BMP, TGA, and other image formats to Quake WAD format
 - **Extract textures from WAD**: Export all textures from WAD files to lossless PNG images
-- **Extract textures from BSP**: Extract embedded textures from Quake/Half-Life BSP files (BSP versions 29 and 30)
+- **Extract textures from BSP**: Extract embedded textures from Quake/Half-Life BSP files (BSP2 and classic BSP 29/30)
 - **WAD2 and WAD3 support**: Create Quake (WAD2) or Half-Life (WAD3) format files
 - **QPIC support**: Extract UI graphics (type 0x42) from WAD files
-- **Dithering options**: Floyd-Steinberg and ordered (Bayer matrix) dithering
+- **Dithering options**: Error diffusion (Floyd-Steinberg), ordered (Bayer), random, halftone, and closest-color mapping
+- **No-fullbright default**: Image conversion defaults to a no-fullbright Quake palette to avoid accidental glowing texels in-game
 - **Alpha channel handling**: Multiple modes (clipped, dithered, or color replacement)
 - **Automatic mipmap generation**: For texture WAD files
 - **Batch processing**: Process entire folders of images
+
+### Graphical Editor (fcwadeditor.py)
+- **Tab-based interface**: Open and work with multiple WAD files simultaneously
+- **Visual texture browser**: View all textures in a WAD file with thumbnails
+- **Image viewer**: Double-click any texture to view it in full detail
+- **Quake palette editor**: Edit all 256 palette colors in a dedicated tab with direct color picking
+- **Palette gradient helper**: Apply left/right multi-step fades from a selected palette color down to 10% brightness
+- **Display palette override**: Preview all loaded textures/images using a custom `palette.lmp` without modifying texture data
+- **Multi-select editing**: Shift-click ranges and Ctrl-click non-contiguous texture sets
+- **Reordering support**: Drag and drop thumbnails to reorder texture order in the WAD
+- **Import progress tab**: Non-blocking import status with per-file telemetry and progress bars
+- **Zoom and pan**: Use mouse wheel or Ctrl+/- to zoom, click and drag to pan
+- **Import/Export**: Import textures from other WAD files or export to different formats (WAD2/WAD3)
+- **Edit textures**: Copy, paste, resize, and reimport textures from image files
+- **Unsaved changes tracking**: Visual indicators for modified files
+- **Multiple file support**: Load and edit multiple WAD files at once
 
 ## Installation
 
@@ -31,37 +57,118 @@ pip install Pillow
 
 ## Usage
 
-### Basic Usage
+### Graphical Editor (fcwadeditor.py)
+
+Launch the graphical editor:
+```bash
+python3 fcwadeditor.py
+```
+
+#### Menu Options
+
+**File Menu:**
+- **New** (Ctrl+N): Create a new WAD file (WAD2 or WAD3)
+- **Open** (Ctrl+O): Load one or more WAD files (BSP2 or BSP3 .wad files)
+- **Save** (Ctrl+S): Save the current WAD file in-place
+- **Save As**: Save the current WAD file with a new name
+- **Preferences**: Configure default import palette and dithering options
+- **Import from WAD**: Load textures from another WAD file into the current one
+- **Import Image(s)**: Import one or more image files as textures into the current WAD
+- **Export**: Export the current WAD file in a specific format (BSP2/BSP3)
+- **Close Tab** (Ctrl+W): Close the current tab
+- **Exit**: Close the application (prompts to save unsaved changes)
+
+**Edit Menu:**
+- **Copy Texture** (Ctrl+C): Copy the currently selected texture to clipboard
+- **Paste Texture** (Ctrl+V): Paste clipboard texture into current WAD (auto-renames if duplicate)
+- **Delete**: Remove selected texture(s)
+- **Rename Texture**: Rename the selected texture (with WAD naming constraints)
+- **Resize Texture**: Resize the currently selected texture to new dimensions
+- **Reimport Texture**: Replace the selected texture with a new image from file
+- **Sort Textures Alphabetically**: Sort current WAD texture list by name
+- **Edit Quake Palette**: Open a dedicated palette tab to edit colors and export/load Quake `palette.lmp` files
+  - Color edit dialog supports optional gradient fade tools:
+    - **Fade this color** checkbox
+    - **Fade Right** / **Fade Left** direction
+    - **Steps** textbox (default `15`), producing source color plus 15 progressively darker entries down to 10% brightness
+
+**View Menu:**
+- **Zoom In / Zoom Out**: Scale thumbnail icon size in texture tabs and zoom image viewer tabs
+- **Set Icon Size**: Set a specific thumbnail icon size in pixels
+- **Display Using Custom Palette**: Load a `.lmp` palette and display all currently loaded WAD textures and image tabs using that palette
+- **Clear Custom Palette**: Revert display rendering back to each texture's original palette
+- **View in Separate Tab**: Open selected texture in an image viewer tab
+- When a custom display palette is active, the status bar shows the palette filename
+
+**Preferences (File -> Preferences...):**
+- Choose import palette mode: original Quake, no-fullbrights, or custom palette
+- Select a custom `.lmp` palette file used for imports when custom mode is selected
+- Toggle **Include fullbrights in this import** for custom palette mode
+  - Unchecked (default): importer remaps away from fullbright indices `224-255`
+  - Checked: importer keeps fullbright range available
+
+#### Working with the Editor
+
+1. **Open a WAD file**: Use File → Open or press Ctrl+O
+2. **Browse textures**: Scroll through the thumbnail grid
+3. **Select a texture**: Click once on any texture to select it
+4. **View a texture**: Double-click any texture to open it in a detailed viewer tab
+5. **Zoom in/out**: 
+   - Use mouse wheel while viewing an image
+   - Press Ctrl+ to zoom in, Ctrl- to zoom out
+6. **Pan an image**: Click and drag to move around a zoomed image
+7. **Copy/Paste**: Select a texture, press Ctrl+C to copy, switch to another WAD tab, press Ctrl+V to paste
+8. **Import textures**: Use File → Import from WAD to select textures from another file
+9. **Import image files**: Use File → Import Image(s) to convert and add new textures from PNG/JPG/BMP/TGA/TIFF files
+10. **Reorder textures**: Drag and drop thumbnails to change WAD texture order
+11. **Save changes**: Press Ctrl+S or use File → Save
+
+#### Tab Management
+
+- Each WAD file or image opens in its own tab
+- Tabs show an asterisk (*) before the name when there are unsaved changes
+- Close tabs with Ctrl+W or the Close Tab menu option
+- Switch between tabs by clicking on them
+
+### Command-Line Tool (fcwadtool.py)
+
+#### Basic Usage
 
 **Convert images to WAD:**
 
 Convert a single image:
 ```bash
-python3 wadtools.py --input texture.png
+python3 fcwadtool.py --input texture.png
 ```
 
 Convert all images in a folder:
 ```bash
-python3 wadtools.py --input /path/to/textures/
+python3 fcwadtool.py --input /path/to/textures/
 ```
 
 **Extract textures from WAD:**
 
 Extract all textures from a WAD file to PNG images:
 ```bash
-python3 wadtools.py --input textures.wad
+python3 fcwadtool.py --input textures.wad
 ```
 
 Extract to a custom directory:
 ```bash
-python3 wadtools.py --input textures.wad --output custom_folder
+python3 fcwadtool.py --input textures.wad --output custom_folder
 ```
 
 **Extract textures from BSP:**
 
 Extract textures from a BSP file:
 ```bash
-python3 wadtools.py --input map.bsp
+python3 fcwadtool.py --input map.bsp
+```
+
+**Merge multiple WAD files into one deduplicated WAD:**
+
+```bash
+python3 fcwadtool.py -i /path/to/wads/*.wad -o merged.wad
 ```
 
 ### Command Line Options
@@ -70,15 +177,19 @@ python3 wadtools.py --input map.bsp
 - `-i, --input`: Input file or folder (images/WAD/BSP)
 
 **Optional:**
-- `--output`: Output filename or directory
+- `-o, --output`: Output filename or directory
   - For image→WAD: Output WAD filename (auto-generated if not specified)
   - For WAD→PNG: Output directory (defaults to WAD filename without extension)
+  - For multiple WAD inputs: Output merged WAD filename (deduplicated by texture name)
 - `--type`: WAD format type (for image→WAD conversion)
   - `2`: WAD2 format for Quake (default)
   - `3`: WAD3 format for Half-Life (includes palette data)
 - `--dithering`: Dithering mode (for image→WAD conversion)
-  - `0`: Floyd-Steinberg dithering (default)
+  - `0`: Error Diffusion (Floyd-Steinberg, default)
   - `1`: Ordered (Bayer matrix) dithering
+  - `2`: Random dithering
+  - `3`: Halftone dithering
+  - `4`: Closest Color Available (no dithering)
 - `--alpha`: Alpha channel handling mode
   - `0`: Clipped alpha - transparent pixels become index 255 (default)
   - `1`: Dithered alpha - apply dithering to alpha channel
@@ -93,37 +204,45 @@ python3 wadtools.py --input map.bsp
 
 Create a WAD3 file for Half-Life:
 ```bash
-python3 wadtools.py --input textures/ --type 3
+python3 fcwadtool.py --input textures/ --type 3
 ```
 
 Convert with ordered dithering:
 ```bash
-python3 wadtools.py --input textures/ --dithering 1
+python3 fcwadtool.py --input textures/ --dithering 1
 ```
 
 Convert with dithered alpha:
 ```bash
-python3 wadtools.py --input logo.png --alpha 1 --alphadither 0
+python3 fcwadtool.py --input logo.png --alpha 1 --alphadither 0
 ```
 
 Convert with custom alpha color:
 ```bash
-python3 wadtools.py --input texture.png --alpha 2 --alphacolor #FF00FF
+python3 fcwadtool.py --input texture.png --alpha 2 --alphacolor #FF00FF
 ```
 
 Specify output filename:
 ```bash
-python3 wadtools.py --input textures/ --output custom.wad
+python3 fcwadtool.py --input textures/ --output custom.wad
+```
+
+Merge and deduplicate all textures from multiple WAD files:
+```bash
+python3 fcwadtool.py -i /mnt/userdata/Games/Quake/mg3/maps/*.wad -o mg3.wad
 ```
 
 ## How It Works
 
 1. **Image Loading**: Loads images using PIL/Pillow
 2. **Alpha Processing**: Handles transparency according to selected mode
-3. **Dithering**: Applies Floyd-Steinberg or ordered dithering to reduce colors to Quake's 256-color palette
+3. **Dithering**: Applies the selected mode (error diffusion, ordered, random, halftone, or closest-color mapping) to reduce colors to Quake's 256-color palette
+  - Random dithering uses a fast noise+quantize path to avoid slow per-pixel Python loops on large textures
+  - Default conversion uses [palette_no_fb.tga](palette_no_fb.tga) so generated indices stay below Quake's fullbright range
+  - [palette_full.tga](palette_full.tga) remains available as the full reference palette
 4. **Palette Conversion**: Maps RGB colors to closest Quake palette indices
 5. **Mipmap Generation**: Creates 4 mipmap levels for each texture
-6. **WAD Creation**: Writes textures to WAD3 format file
+6. **WAD Creation**: Writes textures to WAD2 or WAD3 output, depending on selected mode
 
 ## Supported Image Formats
 
@@ -136,7 +255,7 @@ python3 wadtools.py --input textures/ --output custom.wad
 
 ## WAD Format
 
-This tool creates WAD3 format files compatible with:
+This tool creates WAD2 (Quake) and WAD3 (Half-Life) format files compatible with:
 - Quake
 - Half-Life
 - Other GoldSrc engine games
@@ -165,7 +284,7 @@ pip install Pillow
 - Ensure images have supported extensions (.png, .jpg, etc.)
 
 **Texture quality issues**
-- Try different dithering modes (`--dithering 0` vs `--dithering 1`)
+- Try different dithering modes (`--dithering 0` through `--dithering 4`)
 - For images with transparency, experiment with alpha modes
 
 ## License
