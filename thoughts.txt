@@ -54,3 +54,421 @@ Let's add another command line arg:
   Defaults to 2, this is is the wad type (BSP2 / BSP3) that the tool will generate.
 
 Let's add a mode: If the --input file is a .wad file, let's save out lossless PNGs of all the graphics in that wad file into a subfolder (by default named the same as the wad file without the .wad extension).
+
+
+
+
+Let's add a second script: fcwadeditor.py
+
+This will be a small graphical application that will allow us to easily edit wadfiles in a graphical view.
+
+The application will create a window with a toolbar with the following categories: 
+
+File
+  Open: Creates a file requester allowing you to load a specific BSP2 or BSP3 .wad file (or files, we should be able to load multiple wad files at once)
+  
+  Save: Saves the current wad file in-place.
+
+  Import: Creates a file requester that allows you to load a .wad file into a separate window in order to select specific graphics you wish to load into your current open wad file.
+
+  Export: Creates a file requester that allows you to specify where an exported version of the current open wad file should be exported to as well as which mode to export in (BSP2 / BSP3)
+
+  Close: Closes the current loaded wad file.
+  
+Edit:
+  Copy: Copy the current texture into a clipboard.
+
+  Paste: Paste the current image into the currently selected wad file (if it results in a duplicate image, we simply rename the new image to add a number at the end)
+
+  Resize: Resize the currently selected texture image in the wad file.
+
+  Reimport: Create a file requester for the user to select any supported image file to replace the currently selected texture.
+
+Exit: Exit the program. If we have any unsaved files, ask whether the user wishes to save each unsaved file in turn.
+
+The application should be tab-based with any image or wad file occupying its own tab in the interface and each tab should have the name of the wad or image currently loaded into it.
+
+For any tab with unsaved edits, we should indicate that by adding an asterisk before the name of the wad or image.
+
+Double clicking on any texture should create a new tab with the double-clicked image loaded into it for the user to view. On image tabs, CTRL+ and CTRL- as well as simply roilling the mousewheel should zoom the image in and out. Clicking and dragging should smoothly pan the image around.
+
+
+
+
+============
+
+Great Start!
+
+Ok, a few things I saw:
+
+For each tab, let's add a close icon on each one.
+
+When we display our texture icons in the tabs themselves, let's fill the screen horizontally and only wrap at the end of the window.
+
+Let's also add a new menu item: 
+
+View:
+  Zoom In: Zooms the view in. If we are looking at a set of texture icons, increase the size of the icons by 25%.
+
+  Zoom out: Zooms the view out. If we are looking at a set of texture icons, decrease the size of the icons by 25%.
+
+  Set Icon size: Create a modal window with close button and OK:
+    The text should be: Please enter the size of image icons in pixels (for the largest dimension):
+
+  View in separate tab: Same as double clicking.
+
+When the images are displayed in the separate tab, the motion right now is a little jerky, can we reduce the mouse sensitivity so that the movement is much smoother? 
+
+============
+
+Great!
+
+Let's ensure that we have close icons on each of the tabs.
+
+Let's make sure we get the window width in a reliable way so that we wrap the image icons at the correct place. Right now they are wrapping strangely and not filling the available space.
+
+Let's make sure that the zoom operations that use CTRL KEY + (EQUAL / PLUS KEY) and CTRL KEY + (HYPHEN / UNDERSCORE KEY) are actually treated as keyboard shortcuts.
+
+Let also add a new option under File:
+  New: Creates a file requester that saves a new wad file to the file system.
+
+============
+
+Great!
+
+Let's make sure that in the thumbnail texture view, users can shift click to select images so that they can copy multiple images at once and paste them in a different target wad.
+
+============
+
+Great!
+
+Let's make sure that in the thumbnail texture view, pressing the DELETE or BACKSPACE key deletes the currently selected texture.
+
+Let's also add a new menu item:
+  Under Edit:
+    DELETE: Deletes the currently selected texture.
+
+Let's also allow users to select multiple non-contiguous textures in the thumbnail view by CTRL-clicking.
+
+============
+
+Let's add another menu item under File:
+  Import image(s): Creates a file requester where the user can select images from any folder to be added to the current .wad they should be named fro mtheir file name with no extension. 
+
+============
+
+Let's add a small modal dialog in the center of the screen when an import operation starts so that the app doesn't look stalled when we do large image imports. When the import ends, we can auto-dismiss the dialog.
+
+============
+
+Let's add a progress bar to the import modal dialog. It should simply fill in from left to right and be 3 pixels tall and use the full width of the modal dialog.
+
+We should display the current progress of image importing in the format:
+4653416 / 146509836 (34%) where the first number is the current bytes imported, the second number is the total bytes to import and the third in parentheses is the percentage of importing complete.
+
+I also suspect I hit a bug, I am trying to open /media/developer/userdata/Games/Quake/fcarch/textures/fctextures/wads/fc2.wad and import /media/developer/userdata/Games/Quake/fcarch/textures/fctextures/biki.jpg and it reliably stalls out every time. Can you investigate?
+
+============
+
+It still stalls out with no indication of when it will finish. This is the error I get when I CTRL-C the process:
+
+python3 ./fcwadeditor.py 
+^CException in Tkinter callback
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/tkinter/__init__.py", line 2077, in __call__
+    return self.func(*args)
+           ~~~~~~~~~^^^^^^^
+  File "/media/developer/userdata/Games/Quake/tools/fcwadtool/./fcwadeditor.py", line 1030, in file_import_images
+    result = fcwadtool.process_image(filepath, 0, 0, 0, (0, 0, 0))
+  File "/media/developer/userdata/Games/Quake/tools/fcwadtool/fcwadtool.py", line 426, in process_image
+    img = floyd_steinberg_dither(img, QUAKE_PALETTE)
+  File "/media/developer/userdata/Games/Quake/tools/fcwadtool/fcwadtool.py", line 135, in floyd_steinberg_dither
+    index = find_closest_color((r, g, b), palette)
+  File "/media/developer/userdata/Games/Quake/tools/fcwadtool/fcwadtool.py", line 109, in find_closest_color
+    if distance < min_distance:
+       ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+
+Let's use a Tab or whatever is the best implementation under tkinter to show import information instead of anything that may block UI updates.
+
+============
+
+When we set icon size, let's make sure the thumbnails actually reflect the size specified, if the thumbnails are smaller or larger than the size specified, let's scale them to the spoecified size, no matter what direction we need to scale in. Let's ensure they are all the size specified.
+
+============
+
+Let's add a new option to the edit menu: 
+
+Rename texture: Creates a modal dialog that allows the user to rename the currently selected texture, let's also make sure that we include a note in the modal about the naming restrictions / limitations of BSP2 / BSP3 WAD files.
+
+Additionally, in the thumbnail list, let's make it so that right-clicking on a tile will bring up a context menu with all the same options as the edit menu. 
+
+============
+
+Hi Copilot,, I am trying to extract wads from the folder:
+
+/mnt/userdata/Games/Quake/mg3/maps
+
+I am using the command:
+
+python3 ./fcwadtool.py -i /mnt/userdata/Games/Quake/mg3/maps/*.bsp
+
+But I get the following output:
+
+usage: fcwadtool.py [-h] -i INPUT [--output OUTPUT] [--dithering {0,1}] [--alpha {0,1,2}] [--alphadither {0,1}] [--alphacolor ALPHACOLOR] [--type {2,3}]
+fcwadtool.py: error: unrecognized arguments: /mnt/userdata/Games/Quake/mg3/maps/boss.bsp /mnt/userdata/Games/Quake/mg3/maps/dm1.bsp /mnt/userdata/Games/Quake/mg3/maps/hub.bsp /mnt/userdata/Games/Quake/mg3/maps/map1.bsp /mnt/userdata/Games/Quake/mg3/maps/map2b.bsp /mnt/userdata/Games/Quake/mg3/maps/map2.bsp /mnt/userdata/Games/Quake/mg3/maps/map3.bsp /mnt/userdata/Games/Quake/mg3/maps/map4.bsp /mnt/userdata/Games/Quake/mg3/maps/map5.bsp /mnt/userdata/Games/Quake/mg3/maps/map6.bsp /mnt/userdata/Games/Quake/mg3/maps/map7.bsp /mnt/userdata/Games/Quake/mg3/maps/map8.bsp /mnt/userdata/Games/Quake/mg3/maps/secret1.bsp /mnt/userdata/Games/Quake/mg3/maps/secret2.bsp /mnt/userdata/Games/Quake/mg3/maps/secret3.bsp /mnt/userdata/Games/Quake/mg3/maps/secret4.bsp /mnt/userdata/Games/Quake/mg3/maps/secret5.bsp /mnt/userdata/Games/Quake/mg3/maps/secret6.bsp /mnt/userdata/Games/Quake/mg3/maps/start.bsp
+
+Can you investigate?
+
+============
+
+Ok! Great, some of them worked, however, many of them generated this error:
+
+[20/20] Processing: /mnt/userdata/Games/Quake/mg3/maps/start.bsp
+Extracting textures from BSP file: /mnt/userdata/Games/Quake/mg3/maps/start.bsp
+BSP2 format detected (version 5691552)
+Found 1 texture(s) in BSP file
+  Warning: Incomplete data for texture J
+Error: No textures were successfully processed
+
+Completed: 1 succeeded, 19 failed
+
+Can you investigate?
+
+
+============
+
+Ok! That created wads! Perfect! Now lets add a mode where we can do somehting like this:
+
+python3 ./fcwadtool.py -i /mnt/userdata/Games/Quake/mg3/maps/*.wad -o mg3.wad 
+
+The app should then consolidate and deduplicate all the textures in the wads and produce a single wad containing every texture in the folder in a single wad. 
+
+============
+
+Hi, the fcwadeditor is taking very long to import .PNG files, can we add some timing telemetry to figure out what steps we're stalling at so that we can optimize the application?
+
+============
+
+Ok, I saw no output other than:
+developer@devbox01:/mnt/userdata/Games/Quake/tools/fcwadtool$ python3 fcwadeditor.py
+Created WAD2 (Quake) file: /mnt/userdata/Games/Quake/fcarch/textures/fctextures/wads/hpl.wad with 1 texture(s)
+Created WAD2 (Quake) file: /mnt/userdata/Games/Quake/fcarch/textures/fctextures/wads/hpl.wad with 2 texture(s)
+
+Can we ensure that we're piping output to the launching console?
+
+============
+
+Ok, I juust tried a batch import, this was the output:
+
+python3 fcwadeditor.py
+Processing: hpl001.png
+  Timing: open=14.0ms, decode=11.2ms, alpha/rgb=4.1ms, dither=196.77s, palette=133.44s, total=330.24s
+  ✓ Success: hpl001 (1024x1024)
+Processing: hpl002a.png
+  Timing: open=0.4ms, decode=10.7ms, alpha/rgb=4.0ms, dither=195.76s, palette=134.45s, total=330.22s
+  ✓ Success: hpl002a (1024x1024)
+Processing: hpl003.png
+  Timing: open=0.3ms, decode=11.5ms, alpha/rgb=2.2ms, dither=194.66s, palette=132.62s, total=327.29s
+  ✓ Success: hpl003 (1024x1024)
+Processing: hpl004.png
+  Timing: open=0.3ms, decode=11.7ms, alpha/rgb=2.3ms, dither=195.50s, palette=143.70s, total=339.21s
+  ✓ Success: hpl004 (1024x1024)
+Processing: hpl005.png
+  Timing: open=0.3ms, decode=10.3ms, alpha/rgb=2.0ms, dither=197.54s, palette=133.88s, total=331.43s
+  ✓ Success: hpl005 (1024x1024)
+Processing: hpl005a.png
+  Timing: open=0.3ms, decode=10.1ms, alpha/rgb=1.9ms, dither=196.89s, palette=134.39s, total=331.29s
+  ✓ Success: hpl005a (1024x1024)
+Processing: hpl006.png
+  Timing: open=0.3ms, decode=10.7ms, alpha/rgb=1.9ms, dither=198.94s, palette=134.69s, total=333.64s
+  ✓ Success: hpl006 (1024x1024)
+Processing: hpl007.png
+  Timing: open=0.3ms, decode=11.8ms, alpha/rgb=4.1ms, dither=195.36s, palette=144.90s, total=340.27s
+  ✓ Success: hpl007 (1024x1024)
+Processing: hpl008.png
+  Timing: open=0.3ms, decode=11.0ms, alpha/rgb=1.8ms, dither=195.47s, palette=134.48s, total=329.96s
+  ✓ Success: hpl008 (1024x1024)
+Processing: hpl009.png
+  Timing: open=0.3ms, decode=9.2ms, alpha/rgb=2.0ms, dither=199.77s, palette=136.71s, total=336.50s
+  ✓ Success: hpl009 (1024x1024)
+Processing: hpl010.png
+  Timing: open=0.2ms, decode=9.2ms, alpha/rgb=1.9ms, dither=198.45s, palette=136.31s, total=334.77s
+  ✓ Success: hpl010 (1024x1024)
+Processing: hpl011.png
+  Timing: open=0.3ms, decode=4.3ms, alpha/rgb=2.1ms, dither=190.12s, palette=126.66s, total=316.79s
+  ✓ Success: hpl011 (1024x1024)
+Processing: hpl012.png
+  Timing: open=0.3ms, decode=6.0ms, alpha/rgb=2.1ms, dither=193.58s, palette=132.93s, total=326.51s
+  ✓ Success: hpl012 (1024x1024)
+Processing: hpl13.png
+  Timing: open=0.3ms, decode=7.3ms, alpha/rgb=3.9ms, dither=198.50s, palette=133.89s, total=332.40s
+  ✓ Success: hpl13 (1024x1024)
+Processing: hpl014.png
+  Timing: open=0.3ms, decode=10.8ms, alpha/rgb=2.0ms, dither=196.20s, palette=133.73s, total=329.94s
+  ✓ Success: hpl014 (1024x1024)
+Processing: hpl015.png
+^CTraceback (most recent call last):
+  File "/mnt/userdata/Games/Quake/tools/fcwadtool/fcwadeditor.py", line 1871, in <module>
+    main()
+    ~~~~^^
+  File "/mnt/userdata/Games/Quake/tools/fcwadtool/fcwadeditor.py", line 1867, in main
+    root.mainloop()
+    ~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/tkinter/__init__.py", line 1602, in mainloop
+    self.tk.mainloop(n)
+    ~~~~~~~~~~~~~~~~^^^
+KeyboardInterrupt
+
+For reference, changing the mode in GIMP from truecolor to palettized takes less than a second for a 1024x1024 pixel image.
+
+============
+
+Ok, that worked great! However, the dithering is using the full Quake palette and we're getting accidental fullbright colors. We need to ensure that we default to no fullbrights by default in both tools so that we don't get weird spots of light in quake when we load in-game. For this purpose I've put 2 files in our app folder, palette_full.tga is the full quake palette, including fullbright colors, but the one we should default to is palette_no_fb.tga, so that we do not generate fullbrights. Can you make this change?
+
+============
+
+Great! Let's add a feature under the edit menu:
+Remove Fullbrights
+
+
+============
+
+Hi Copilot, I would like to add a feature in the edit menu:
+Sort Textures Alphabetically. It would simply sort the list of textures into alphabetical order.
+
+
+Great! Now let's add a feature so that in the thumbnail view, clicking and dragging a thumbnail will reorder it in the wad file.
+
+============
+
+Hi Copilot, I would like to add a few options to the image import process.
+
+When the file picker appears, let's add a radio button set to control which palette is used in the import:
+
+Palette
+
+[] Use Original Quake palette
+[] Use Custom No-Fullbrights palette
+
+
+
+
+
+Actually, I think these import options would actually be better off in a preferences panel in the application, so the user doesn't have to select the options everytime they import an image or set of images. To this end, let's ensure that the selector only appears once and then the settings get persisted in a JSON-based options.cfg file. We should also persist the last folder we used and a list of the last 10 files we edited. Then, let's add an option: "Preferences" to the "File" Menu. It should contain these options:
+
+Palette (drop-down)
+
+[] Use Original Quake palette
+[] Use Custom No-Fullbrights palette
+
+Dithering type (drop-down)
+
+[] Use Ordered Dithering: Uses a fixed threshold matrix (e.g., Bayer matrix) to create regular, dispersed patterns; fast and suitable for animations but may show visible artifacts. 
+
+[] Error Diffusion: Distributes quantization error to neighboring pixels for finer detail; includes algorithms like Floyd-Steinberg (standard) and Sierra (faster). 
+
+[] Random Dithering: Adds random noise before thresholding; reduces artifacts but is computationally intensive and less common in modern real-time applications. 
+
+[] Halftone Dithering: Clusters dots to mimic newspaper printing; useful for offset printing and laser printers.  
+
+============
+
+Great! Let's add one more dithering type: 
+[] Closest Color Available: Wadtool will select the closest color in the Quake palette for each pixel in the image.
+
+
+
+I tested importing 3 files using the random dithering mode and it feels very slow, but the app provided useful timings, can we look at this and see if we can use a more efficient way to to the random dithering that will speed it up?
+
+Palette: Use Custom No-Fullbrights palette
+Dithering: Random Dithering: Adds random noise before thresholding; reduces artifacts but is computationally intensive and less common in modern real-time applications.
+
+Processing: concrete_bare.png
+  Timing: open=0.4ms, decode=55.9ms, alpha/rgb=384.6ms, dither=108.33s, palette=311.2ms, total=109.08s
+  ✓ Success: concrete_bare (1024x1024)
+Processing: concrete_grass.png
+  Timing: open=0.2ms, decode=51.8ms, alpha/rgb=392.1ms, dither=112.74s, palette=320.2ms, total=113.51s
+  ✓ Success: concrete_grass (1024x1024)
+Processing: concrete_tubes.png
+  Timing: open=0.5ms, decode=56.3ms, alpha/rgb=394.1ms, dither=113.80s, palette=358.8ms, total=114.61s
+  ✓ Success: concrete_tubes (1024x1024)
+
+Import timing summary:
+  Avg/file: open=0.4ms, decode=54.7ms, alpha/rgb=390.3ms, dither=111.62s, palette=330.1ms, total=112.40s
+  Stage share: open=0.0%, decode=0.0%, alpha/rgb=0.3%, dither=99.3%, palette=0.3%
+  Total import wall time: 338.60s for 3 file(s)
+  Slowest file: concrete_tubes.png (114.61s)
+
+============
+
+Hi Copilot, I would like to create a new menu option under "Edit": "Edit Quake Palette".
+It should spawn a separate tab. The tab should contain a grid containing the set of colors in the quake palette.
+Clicking on a color should spawn a color picker, allowing you to change that individual color. At the bottom of the palette there should buttons: "Export Custom Palette", "Load Custom Palette". The exported palette should conform to the Quake palette.lmp (https://quakewiki.org/wiki/Quake_palette). 
+
+
+
+Yes, let's make sure that we can specify the custom palette to be used in the preferences panel, lets' also ensure that we maintain the fullbrights / no-fullbrights switch by having the importer selectively ignore the fullbright color range by default. We should also add a selector to the custom palette preferences panel:
+
+[] Include fullbrights in this import
+
+============
+
+Let's add some new options under the "view" menu:
+
+"Display Using Custom Palette": Will spawn a file requester that will let you load a specific palette and then will display the currently loaded wad(s) and any loaded images using that custom palette.
+
+"Clear custom palette": Would revert back to the original Quake palette.
+
+ If a custom palette is in use, we need to show that to the user by putting it in a status bar or similar
+
+
+Ok, great! I would like to add a feature: Given that Quake's palette is basically just a set of 16 step gradients (ending in a dark version of the source color), I would like a function in the edit color dialog:
+
+[] Fade this color (checkbox)
+Fade left / Fade Right (drop down)
+Steps (textbox)
+
+When the box is checked, the app should check whether we are fading left or right (if right, we are incrementing the color index, left we are decreasing). The default steps should be 15 (source color + 15 faded versions ending in a 10% brightness version) using the number of color slots specified in the "Steps" textbox. This way it will be easy to change an entire color line instead of plugging numbers in manually. 
+
+============
+
+I think I found a bug, I clicked edit quake palette and when I clicked on a color, I got a blank "Edit Quake Palette Color" dialog.
+
+============
+
+In the image display, a useful addition would be a tiled view of the selected image. Let's make it a default that when a user double clicks to view an image, we pop up a 3x3 grid of that image so that the user can see what it looks like tiled. 
+
+
+============
+
+Ok, great!
+I'm thinking we should be able to turn off tiling for images that we want to see up close.
+Let's add a new options in the "View" menu:
+
+View Original Image
+View Tiled Image
+
+So that users can switch between modes.
+
+============
+When the current tab is an image, largeet's add a menu item under "View" : "Set Image Zoom Level" that pops out a sub menu with the following values:
+
+25%
+50%
+75%
+100%
+200%
+400%
+
+============
+
+Let's make the "File" : "Open" file requester also accept .bsp files. When loading a .bsp, a new unsaved wad file should be created containing all the textures used in that .BSP file. 
+
+
+============
+
+I want to add drawing features to the image display. When a user double clicks an image to display it, it should appear in its own tab as it does now. However, I also want it to have a robust set of pixel-drawing tools. Let's start by adding a pixel pencil tool to the image display. Let's create a toolbox that will contain:
+
+A square button for our pencil tool.
+A color square that will pop up a copy of the current palette we can use to 

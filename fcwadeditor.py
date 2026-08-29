@@ -131,6 +131,7 @@ class WADFile:
     """Represents an open WAD file"""
     def __init__(self, filepath: str = None, wad_type: int = 2):
         self.filepath = filepath
+        self.display_name: Optional[str] = None
         self.wad_type = wad_type  # 2 = WAD2 (Quake), 3 = WAD3 (Half-Life)
         self.textures: List[TextureData] = []
         self.modified = False
@@ -270,6 +271,8 @@ class WADFile:
         """Get display name for this WAD"""
         if self.filepath:
             return Path(self.filepath).name
+        if self.display_name:
+            return self.display_name
         return "Untitled.wad"
 
 
@@ -278,6 +281,11 @@ class ImageViewerTab(Frame):
     def __init__(self, parent, texture: TextureData):
         super().__init__(parent)
         self.texture = texture
+        self.default_tile_columns = 3
+        self.default_tile_rows = 3
+        self.tile_columns = self.default_tile_columns
+        self.tile_rows = self.default_tile_rows
+        self.is_tiled_view = True
         self.zoom = 1.0
         self.min_zoom = 0.1
         self.max_zoom = 16.0
@@ -317,27 +325,61 @@ class ImageViewerTab(Frame):
         self.canvas.focus_set()
         
         self.photo_image = None
-        self.image_id = None
+        self.image_ids: List[int] = []
         self.update_image()
     
     def update_image(self):
         """Update the displayed image"""
-        # Get zoomed image
+        # Get one zoomed tile image and render based on current view mode.
         self.photo_image = self.texture.get_display_image(self.zoom)
+        tile_width = self.photo_image.width()
+        tile_height = self.photo_image.height()
         
         # Update canvas
-        if self.image_id:
-            self.canvas.delete(self.image_id)
-        
-        self.image_id = self.canvas.create_image(0, 0, anchor='nw', image=self.photo_image)
+        for image_id in self.image_ids:
+            self.canvas.delete(image_id)
+        self.image_ids = []
+
+        for row in range(self.tile_rows):
+            for col in range(self.tile_columns):
+                image_id = self.canvas.create_image(
+                    col * tile_width,
+                    row * tile_height,
+                    anchor='nw',
+                    image=self.photo_image,
+                )
+                self.image_ids.append(image_id)
         
         # Update scroll region
-        img_width = int(self.texture.width * self.zoom)
-        img_height = int(self.texture.height * self.zoom)
+        img_width = tile_width * self.tile_columns
+        img_height = tile_height * self.tile_rows
         self.canvas.configure(scrollregion=(0, 0, img_width, img_height))
         
         # Update info label
-        self.info_label.configure(text=f"{self.texture.name} - {self.texture.width}x{self.texture.height} - Zoom: {int(self.zoom*100)}%")
+        if self.is_tiled_view:
+            view_mode_text = f"Tiled {self.tile_columns}x{self.tile_rows}"
+        else:
+            view_mode_text = "Original"
+
+        self.info_label.configure(
+            text=(
+                f"{self.texture.name} - {self.texture.width}x{self.texture.height} "
+                f"- {view_mode_text} - Zoom: {int(self.zoom*100)}%"
+            )
+        )
+
+    def set_tiled_view(self, enabled: bool):
+        """Toggle between tiled (3x3) and original (1x1) image view."""
+        if enabled:
+            self.tile_columns = self.default_tile_columns
+            self.tile_rows = self.default_tile_rows
+            self.is_tiled_view = True
+        else:
+            self.tile_columns = 1
+            self.tile_rows = 1
+            self.is_tiled_view = False
+
+        self.update_image()
     
     def zoom_in(self, event=None):
         """Zoom in"""
@@ -352,6 +394,20 @@ class ImageViewerTab(Frame):
         self.zoom = max(self.zoom / 1.5, self.min_zoom)
         if old_zoom != self.zoom:
             self.update_image()
+
+    def set_zoom_percent(self, zoom_percent: int):
+        """Set zoom directly from a percent value."""
+        try:
+            normalized_zoom = float(zoom_percent) / 100.0
+        except Exception:
+            return
+
+        normalized_zoom = max(self.min_zoom, min(self.max_zoom, normalized_zoom))
+        if abs(normalized_zoom - self.zoom) < 1e-9:
+            return
+
+        self.zoom = normalized_zoom
+        self.update_image()
     
     def on_mousewheel(self, event):
         """Handle mouse wheel for zooming"""
@@ -1110,140 +1166,179 @@ class PaletteEditorTab(Frame):
         self.selected_index = color_index
         self._highlight_selected()
         self._set_info_for_index(color_index)
+        dialog = None
 
-        dialog = Toplevel(self)
-        dialog.title(f'Edit Quake Palette Color {color_index}')
-        dialog.geometry('420x260')
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        try:
+            parent_window = self.winfo_toplevel()
+            dialog = Toplevel(parent_window)
+            dialog.title(f'Edit Quake Palette Color {color_index}')
+            dialog.geometry('420x260')
+            dialog.minsize(420, 260)
+            dialog.resizable(False, False)
+            dialog.transient(parent_window)
 
-        frame = Frame(dialog, padx=14, pady=12)
-        frame.pack(fill=BOTH, expand=True)
+            frame = Frame(dialog, padx=14, pady=12)
+            frame.pack(fill=BOTH, expand=True)
 
-        current_rgb = self._get_rgb(color_index)
-        selected_rgb = [current_rgb[0], current_rgb[1], current_rgb[2]]
-        fade_var = BooleanVar(value=False)
-        direction_var = StringVar(value='Fade Right')
-        steps_var = StringVar(value='15')
+            current_rgb = self._get_rgb(color_index)
+            selected_rgb = [current_rgb[0], current_rgb[1], current_rgb[2]]
+            fade_var = BooleanVar(value=False)
+            direction_var = StringVar(value='Fade Right')
+            steps_var = StringVar(value='15')
 
-        Label(frame, text=f'Palette Index: {color_index}', font=('Arial', 10, 'bold')).pack(anchor=W, pady=(0, 10))
+            Label(frame, text=f'Palette Index: {color_index}', font=('Arial', 10, 'bold')).pack(anchor=W, pady=(0, 10))
 
-        color_row = Frame(frame)
-        color_row.pack(fill=X, pady=(0, 10))
+            color_row = Frame(frame)
+            color_row.pack(fill=X, pady=(0, 10))
 
-        preview = Canvas(color_row, width=26, height=26, highlightthickness=1, highlightbackground='#333')
-        preview.configure(bg=self._rgb_to_hex(tuple(selected_rgb)))
-        preview.pack(side=LEFT, padx=(0, 10))
+            preview = Canvas(color_row, width=26, height=26, highlightthickness=1, highlightbackground='#333')
+            preview.configure(bg=self._rgb_to_hex(tuple(selected_rgb)))
+            preview.pack(side=LEFT, padx=(0, 10))
 
-        color_label_var = StringVar(value=f'RGB({selected_rgb[0]}, {selected_rgb[1]}, {selected_rgb[2]})')
-        Label(color_row, textvariable=color_label_var, anchor='w').pack(side=LEFT, fill=X, expand=True)
+            color_label_var = StringVar(value=f'RGB({selected_rgb[0]}, {selected_rgb[1]}, {selected_rgb[2]})')
+            Label(color_row, textvariable=color_label_var, anchor='w').pack(side=LEFT, fill=X, expand=True)
 
-        def choose_color():
-            selected_color = colorchooser.askcolor(
-                color=tuple(selected_rgb),
-                title=f'Pick Color for Index {color_index}',
-                parent=dialog,
+            def choose_color():
+                selected_color = colorchooser.askcolor(
+                    color=tuple(selected_rgb),
+                    title=f'Pick Color for Index {color_index}',
+                    parent=dialog,
+                )
+                if not selected_color or selected_color[0] is None:
+                    return
+
+                rgb = self._clamp_rgb(selected_color[0])
+                selected_rgb[0], selected_rgb[1], selected_rgb[2] = rgb
+                preview.configure(bg=self._rgb_to_hex(rgb))
+                color_label_var.set(f'RGB({rgb[0]}, {rgb[1]}, {rgb[2]})')
+
+            Button(color_row, text='Pick Color...', command=choose_color).pack(side=RIGHT)
+
+            fade_check = Checkbutton(frame, text='Fade this color', variable=fade_var)
+            fade_check.pack(anchor=W, pady=(4, 8))
+
+            fade_controls = Frame(frame)
+            fade_controls.pack(fill=X, pady=(0, 8))
+
+            Label(fade_controls, text='Direction').grid(row=0, column=0, sticky='w')
+            direction_combo = ttk.Combobox(
+                fade_controls,
+                textvariable=direction_var,
+                values=['Fade Right', 'Fade Left'],
+                state='readonly',
+                width=16,
             )
-            if not selected_color or selected_color[0] is None:
+            direction_combo.grid(row=0, column=1, padx=(8, 16), sticky='w')
+
+            Label(fade_controls, text='Steps').grid(row=0, column=2, sticky='w')
+            steps_entry = Entry(fade_controls, textvariable=steps_var, width=8)
+            steps_entry.grid(row=0, column=3, padx=(8, 0), sticky='w')
+
+            Label(
+                frame,
+                text='Steps default to 15: source color + 15 faded colors ending at 10% brightness.',
+                fg='#555',
+                anchor='w',
+                justify=LEFT,
+            ).pack(fill=X, pady=(0, 12))
+
+            def update_fade_controls(_event=None):
+                widget_state = NORMAL if fade_var.get() else DISABLED
+                direction_combo.config(state='readonly' if fade_var.get() else DISABLED)
+                steps_entry.config(state=widget_state)
+
+            fade_check.config(command=update_fade_controls)
+            update_fade_controls()
+
+            button_frame = Frame(frame)
+            button_frame.pack(fill=X)
+
+            def apply_changes():
+                base_rgb = (selected_rgb[0], selected_rgb[1], selected_rgb[2])
+
+                if fade_var.get():
+                    try:
+                        steps = int(steps_var.get().strip())
+                    except Exception:
+                        messagebox.showerror('Invalid Steps', 'Steps must be a whole number.')
+                        return
+
+                    if steps < 0 or steps > 255:
+                        messagebox.showerror('Invalid Steps', 'Steps must be between 0 and 255.')
+                        return
+
+                    direction = 1 if direction_var.get() == 'Fade Right' else -1
+                    changed_indices = self._apply_fade_gradient(color_index, base_rgb, direction, steps)
+                    if not changed_indices:
+                        messagebox.showerror('Error', 'No palette indices were updated.')
+                        return
+
+                    self._set_info_for_index(color_index)
+                    self._notify_palette_changed()
+
+                    applied_fade_steps = max(0, len(changed_indices) - 1)
+                    status_msg = (
+                        f'Applied fade from color {color_index} ({direction_var.get()}) '
+                        f'for {applied_fade_steps} step(s).'
+                    )
+                    if applied_fade_steps < steps:
+                        status_msg = status_msg + ' Reached palette boundary before all steps were applied.'
+
+                    self.editor.set_status(status_msg)
+                else:
+                    if base_rgb == current_rgb:
+                        dialog.destroy()
+                        return
+
+                    self._set_palette_rgb(color_index, base_rgb)
+                    self._set_info_for_index(color_index)
+                    self._notify_palette_changed()
+                    self.editor.set_status(
+                        f'Updated palette color {color_index} to RGB({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]})'
+                    )
+
+                dialog.destroy()
+
+            Button(button_frame, text='Apply', command=apply_changes, width=10).pack(side=LEFT)
+            Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=RIGHT)
+
+            dialog.bind('<Return>', lambda _event: apply_changes())
+            dialog.bind('<Escape>', lambda _event: dialog.destroy())
+
+            # Ensure widgets are realized before making the dialog modal.
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+            y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+            dialog.geometry(f'+{x}+{y}')
+            dialog.deiconify()
+            dialog.wait_visibility()
+            dialog.grab_set()
+            dialog.focus_force()
+
+        except Exception as e:
+            if dialog is not None and dialog.winfo_exists():
+                dialog.destroy()
+
+            messagebox.showerror(
+                'Palette Edit Error',
+                f'Unable to open the color edit dialog. Falling back to direct color picker.\n\n{str(e)}',
+            )
+
+            fallback_color = colorchooser.askcolor(
+                color=self._get_rgb(color_index),
+                title=f'Edit Quake Palette Color {color_index}',
+                parent=self.winfo_toplevel(),
+            )
+            if not fallback_color or fallback_color[0] is None:
                 return
 
-            rgb = self._clamp_rgb(selected_color[0])
-            selected_rgb[0], selected_rgb[1], selected_rgb[2] = rgb
-            preview.configure(bg=self._rgb_to_hex(rgb))
-            color_label_var.set(f'RGB({rgb[0]}, {rgb[1]}, {rgb[2]})')
-
-        Button(color_row, text='Pick Color...', command=choose_color).pack(side=RIGHT)
-
-        fade_check = Checkbutton(frame, text='Fade this color', variable=fade_var)
-        fade_check.pack(anchor=W, pady=(4, 8))
-
-        fade_controls = Frame(frame)
-        fade_controls.pack(fill=X, pady=(0, 8))
-
-        Label(fade_controls, text='Direction').grid(row=0, column=0, sticky='w')
-        direction_combo = ttk.Combobox(
-            fade_controls,
-            textvariable=direction_var,
-            values=['Fade Right', 'Fade Left'],
-            state='readonly',
-            width=16,
-        )
-        direction_combo.grid(row=0, column=1, padx=(8, 16), sticky='w')
-
-        Label(fade_controls, text='Steps').grid(row=0, column=2, sticky='w')
-        steps_entry = Entry(fade_controls, textvariable=steps_var, width=8)
-        steps_entry.grid(row=0, column=3, padx=(8, 0), sticky='w')
-
-        Label(
-            frame,
-            text='Steps default to 15: source color + 15 faded colors ending at 10% brightness.',
-            fg='#555',
-            anchor='w',
-            justify=LEFT,
-        ).pack(fill=X, pady=(0, 12))
-
-        def update_fade_controls(_event=None):
-            widget_state = NORMAL if fade_var.get() else DISABLED
-            direction_combo.config(state='readonly' if fade_var.get() else DISABLED)
-            steps_entry.config(state=widget_state)
-
-        fade_check.config(command=update_fade_controls)
-        update_fade_controls()
-
-        button_frame = Frame(frame)
-        button_frame.pack(fill=X)
-
-        def apply_changes():
-            base_rgb = (selected_rgb[0], selected_rgb[1], selected_rgb[2])
-
-            if fade_var.get():
-                try:
-                    steps = int(steps_var.get().strip())
-                except Exception:
-                    messagebox.showerror('Invalid Steps', 'Steps must be a whole number.')
-                    return
-
-                if steps < 0 or steps > 255:
-                    messagebox.showerror('Invalid Steps', 'Steps must be between 0 and 255.')
-                    return
-
-                direction = 1 if direction_var.get() == 'Fade Right' else -1
-                changed_indices = self._apply_fade_gradient(color_index, base_rgb, direction, steps)
-                if not changed_indices:
-                    messagebox.showerror('Error', 'No palette indices were updated.')
-                    return
-
-                self._set_info_for_index(color_index)
-                self._notify_palette_changed()
-
-                applied_fade_steps = max(0, len(changed_indices) - 1)
-                status_msg = (
-                    f'Applied fade from color {color_index} ({direction_var.get()}) '
-                    f'for {applied_fade_steps} step(s).'
-                )
-                if applied_fade_steps < steps:
-                    status_msg = status_msg + ' Reached palette boundary before all steps were applied.'
-
-                self.editor.set_status(status_msg)
-            else:
-                if base_rgb == current_rgb:
-                    dialog.destroy()
-                    return
-
-                self._set_palette_rgb(color_index, base_rgb)
-                self._set_info_for_index(color_index)
-                self._notify_palette_changed()
-                self.editor.set_status(
-                    f'Updated palette color {color_index} to RGB({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]})'
-                )
-
-            dialog.destroy()
-
-        Button(button_frame, text='Apply', command=apply_changes, width=10).pack(side=LEFT)
-        Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=RIGHT)
-
-        dialog.bind('<Return>', lambda _event: apply_changes())
-        dialog.bind('<Escape>', lambda _event: dialog.destroy())
+            fallback_rgb = self._clamp_rgb(fallback_color[0])
+            self._set_palette_rgb(color_index, fallback_rgb)
+            self._set_info_for_index(color_index)
+            self._notify_palette_changed()
+            self.editor.set_status(
+                f'Updated palette color {color_index} to RGB({fallback_rgb[0]}, {fallback_rgb[1]}, {fallback_rgb[2]})'
+            )
 
     def export_palette(self):
         """Export palette as Quake palette.lmp-compatible raw RGB bytes."""
@@ -1389,17 +1484,36 @@ class WADEditor:
         edit_menu.add_command(label="Sort Textures Alphabetically", command=self.edit_sort_textures_alphabetically)
         
         # View menu
-        view_menu = Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="View", menu=view_menu)
-        view_menu.add_command(label="Zoom In", command=self.view_zoom_in, accelerator="Ctrl++")
-        view_menu.add_command(label="Zoom Out", command=self.view_zoom_out, accelerator="Ctrl+-")
-        view_menu.add_separator()
-        view_menu.add_command(label="Set Icon Size...", command=self.view_set_icon_size)
-        view_menu.add_separator()
-        view_menu.add_command(label="Display Using Custom Palette...", command=self.view_display_using_custom_palette)
-        view_menu.add_command(label="Clear Custom Palette", command=self.view_clear_custom_palette)
-        view_menu.add_separator()
-        view_menu.add_command(label="View in Separate Tab", command=self.view_in_separate_tab)
+        self.view_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=self.view_menu)
+        self.view_menu.add_command(label="Zoom In", command=self.view_zoom_in, accelerator="Ctrl++")
+        self.view_menu.add_command(label="Zoom Out", command=self.view_zoom_out, accelerator="Ctrl+-")
+        self.view_menu.add_separator()
+        self.view_menu.add_command(label="Set Icon Size...", command=self.view_set_icon_size)
+
+        self.image_zoom_levels = (25, 50, 75, 100, 200, 400)
+        self.image_zoom_menu_label = "Set Image Zoom Level"
+        self.image_zoom_menu = Menu(self.view_menu, tearoff=0)
+        for zoom_level in self.image_zoom_levels:
+            self.image_zoom_menu.add_command(
+                label=f"{zoom_level}%",
+                command=lambda value=zoom_level: self.view_set_image_zoom_level(value),
+            )
+        self.view_menu.add_cascade(label=self.image_zoom_menu_label, menu=self.image_zoom_menu)
+        self.view_menu.entryconfig(self.image_zoom_menu_label, state=DISABLED)
+
+        self.view_original_image_label = "View Original Image"
+        self.view_tiled_image_label = "View Tiled Image"
+        self.view_menu.add_command(label=self.view_original_image_label, command=self.view_original_image)
+        self.view_menu.add_command(label=self.view_tiled_image_label, command=self.view_tiled_image)
+        self.view_menu.entryconfig(self.view_original_image_label, state=DISABLED)
+        self.view_menu.entryconfig(self.view_tiled_image_label, state=DISABLED)
+
+        self.view_menu.add_separator()
+        self.view_menu.add_command(label="Display Using Custom Palette...", command=self.view_display_using_custom_palette)
+        self.view_menu.add_command(label="Clear Custom Palette", command=self.view_clear_custom_palette)
+        self.view_menu.add_separator()
+        self.view_menu.add_command(label="View in Separate Tab", command=self.view_in_separate_tab)
         
         # Keyboard shortcuts
         self.root.bind('<Control-n>', lambda e: self.file_new())
@@ -1816,6 +1930,49 @@ class WADEditor:
             return f"{message} | Display palette: {Path(self.display_palette_file).name}"
         return message
 
+    def _get_current_tab_widget(self):
+        """Return the active tab widget, if any."""
+        if not hasattr(self, 'notebook'):
+            return None
+
+        current_tab = self.notebook.select()
+        if not current_tab:
+            return None
+
+        try:
+            return self.notebook.nametowidget(current_tab)
+        except Exception:
+            return None
+
+    def _update_view_menu_state(self):
+        """Enable/disable image-only View actions based on active tab type."""
+        if not hasattr(self, 'view_menu'):
+            return
+
+        active_widget = self._get_current_tab_widget()
+        image_menu_state = NORMAL if isinstance(active_widget, ImageViewerTab) else DISABLED
+        original_state = image_menu_state
+        tiled_state = image_menu_state
+
+        if isinstance(active_widget, ImageViewerTab):
+            if active_widget.is_tiled_view:
+                tiled_state = DISABLED
+                original_state = NORMAL
+            else:
+                original_state = DISABLED
+                tiled_state = NORMAL
+
+        try:
+            self.view_menu.entryconfig(self.image_zoom_menu_label, state=image_menu_state)
+        except Exception:
+            pass
+
+        try:
+            self.view_menu.entryconfig(self.view_original_image_label, state=original_state)
+            self.view_menu.entryconfig(self.view_tiled_image_label, state=tiled_state)
+        except Exception:
+            pass
+
     def _refresh_all_texture_views(self):
         """Regenerate texture previews and refresh all open WAD/image tabs."""
         for wad in self.wad_files.values():
@@ -1945,12 +2102,34 @@ class WADEditor:
         
         Button(dialog, text="Create", command=create_new).pack(side=LEFT, padx=10, pady=10)
         Button(dialog, text="Cancel", command=dialog.destroy).pack(side=RIGHT, padx=10, pady=10)
+
+    def _create_unsaved_wad_from_bsp(self, bsp_filepath: str) -> WADFile:
+        """Build an unsaved WAD object containing textures extracted from a BSP file."""
+        textures = fcwadtool.extract_textures_from_bsp(bsp_filepath)
+        if not textures:
+            raise ValueError("No embedded textures were found in this BSP file")
+
+        wad = WADFile(wad_type=2)
+        wad.display_name = f"{Path(bsp_filepath).stem}.wad"
+
+        for name, width, height, data in textures:
+            texture = TextureData(name, width, height, data, fcwadtool.QUAKE_PALETTE)
+            wad.add_texture(texture)
+
+        # This WAD only exists in memory until the user explicitly saves it.
+        wad.modified = True
+        return wad
     
     def file_open(self):
-        """Open WAD file(s)"""
+        """Open WAD/BSP file(s)."""
         filepaths = filedialog.askopenfilenames(
-            title="Open WAD File",
-            filetypes=[("WAD Files", "*.wad"), ("All Files", "*.*")],
+            title="Open WAD or BSP File",
+            filetypes=[
+                ("WAD and BSP Files", "*.wad *.bsp"),
+                ("WAD Files", "*.wad"),
+                ("BSP Files", "*.bsp"),
+                ("All Files", "*.*"),
+            ],
             multiple=True,
             initialdir=self.get_dialog_initial_dir(),
         )
@@ -1961,8 +2140,14 @@ class WADEditor:
         for filepath in filepaths:
             if filepath:
                 try:
-                    self.set_status(f"Loading {filepath}...")
-                    wad = WADFile(filepath)
+                    extension = Path(filepath).suffix.lower()
+
+                    if extension == '.bsp':
+                        self.set_status(f"Loading BSP {filepath}...")
+                        wad = self._create_unsaved_wad_from_bsp(filepath)
+                    else:
+                        self.set_status(f"Loading {filepath}...")
+                        wad = WADFile(filepath)
                     
                     # Create tab for this WAD
                     viewer = WADViewerTab(self.notebook, wad, self.on_texture_double_click, self)
@@ -1973,8 +2158,14 @@ class WADEditor:
                     
                     # Select the new tab
                     self.notebook.select(viewer)
-                    
-                    self.set_status(f"Loaded {filepath} with {len(wad.textures)} texture(s)")
+
+                    if extension == '.bsp':
+                        self.update_tab_title(tab_id)
+                        self.set_status(
+                            f"Loaded {Path(filepath).name} as unsaved WAD with {len(wad.textures)} texture(s)"
+                        )
+                    else:
+                        self.set_status(f"Loaded {filepath} with {len(wad.textures)} texture(s)")
                 
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to open {filepath}:\n{str(e)}")
@@ -2492,6 +2683,7 @@ class WADEditor:
         
         # Remove tab
         self.notebook.forget(current_tab)
+        self._update_view_menu_state()
         self.set_status("Tab closed")
 
     def _update_custom_palette(self, palette_values: List[int]):
@@ -2892,11 +3084,13 @@ class WADEditor:
             viewer = ImageViewerTab(self.notebook, texture)
             self.add_tab(viewer, texture.name)
             self.notebook.select(viewer)
+            self._update_view_menu_state()
             
             self.set_status(f"Viewing texture: {texture.name}")
     
     def on_tab_changed(self, event):
         """Handle tab change event"""
+        self._update_view_menu_state()
         current_tab = self.notebook.select()
         if current_tab:
             tab_id = str(current_tab)
@@ -3016,6 +3210,41 @@ class WADEditor:
         
         # Bind Enter key to OK
         entry.bind('<Return>', lambda e: apply_size())
+
+    def view_set_image_zoom_level(self, zoom_percent: int):
+        """Set zoom level for current image tab from predefined menu values."""
+        widget = self._get_current_tab_widget()
+        if not isinstance(widget, ImageViewerTab):
+            messagebox.showinfo("Info", "Set Image Zoom Level only applies to image tabs")
+            self._update_view_menu_state()
+            return
+
+        widget.set_zoom_percent(zoom_percent)
+        self.set_status(f"Image zoom set to {zoom_percent}%")
+
+    def view_original_image(self):
+        """Switch current image tab to original (non-tiled) view."""
+        widget = self._get_current_tab_widget()
+        if not isinstance(widget, ImageViewerTab):
+            messagebox.showinfo("Info", "View Original Image only applies to image tabs")
+            self._update_view_menu_state()
+            return
+
+        widget.set_tiled_view(False)
+        self._update_view_menu_state()
+        self.set_status("Image view mode: Original")
+
+    def view_tiled_image(self):
+        """Switch current image tab to tiled 3x3 view."""
+        widget = self._get_current_tab_widget()
+        if not isinstance(widget, ImageViewerTab):
+            messagebox.showinfo("Info", "View Tiled Image only applies to image tabs")
+            self._update_view_menu_state()
+            return
+
+        widget.set_tiled_view(True)
+        self._update_view_menu_state()
+        self.set_status("Image view mode: Tiled 3x3")
     
     def view_in_separate_tab(self):
         """View selected texture in separate tab (same as double-click)"""

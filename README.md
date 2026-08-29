@@ -1,6 +1,15 @@
 # Quake WAD Tools
 
-A Python utility for converting images to/from Quake WAD (Where's All the Data) format, with both command-line and graphical interfaces.
+A Python utility for creating, editing, and exporting Quake WAD (Where's All the Data) files. The project includes both a command-line converter and a graphical editor for working with WAD2/WAD3 texture archives.
+
+## Overview
+
+This toolset can:
+- convert image files into Quake-compatible WAD textures
+- extract textures from WAD and BSP files to PNGs
+- merge multiple WAD inputs into a single output archive
+- open and edit WAD files in a tabbed Tkinter editor
+- preview texture palettes and export edited WAD files
 
 ## Tools Included
 
@@ -25,9 +34,9 @@ A full-featured graphical application for viewing and editing WAD files with a u
 - **Batch processing**: Process entire folders of images
 
 ### Graphical Editor (fcwadeditor.py)
-- **Tab-based interface**: Open and work with multiple WAD files simultaneously
+- **Tab-based interface**: Open and work with multiple WAD files and BSP-derived texture tabs simultaneously
 - **Visual texture browser**: View all textures in a WAD file with thumbnails
-- **Image viewer**: Double-click any texture to view it in full detail
+- **Image viewer**: Double-click any texture to view it as a default 3x3 tiled preview
 - **Quake palette editor**: Edit all 256 palette colors in a dedicated tab with direct color picking
 - **Palette gradient helper**: Apply left/right multi-step fades from a selected palette color down to 10% brightness
 - **Display palette override**: Preview all loaded textures/images using a custom `palette.lmp` without modifying texture data
@@ -68,7 +77,7 @@ python3 fcwadeditor.py
 
 **File Menu:**
 - **New** (Ctrl+N): Create a new WAD file (WAD2 or WAD3)
-- **Open** (Ctrl+O): Load one or more WAD files (BSP2 or BSP3 .wad files)
+- **Open** (Ctrl+O): Load one or more `.wad` or `.bsp` files; opening a BSP creates a new unsaved WAD tab from its embedded textures
 - **Save** (Ctrl+S): Save the current WAD file in-place
 - **Save As**: Save the current WAD file with a new name
 - **Preferences**: Configure default import palette and dithering options
@@ -95,6 +104,9 @@ python3 fcwadeditor.py
 **View Menu:**
 - **Zoom In / Zoom Out**: Scale thumbnail icon size in texture tabs and zoom image viewer tabs
 - **Set Icon Size**: Set a specific thumbnail icon size in pixels
+- **Set Image Zoom Level** (image tabs): Choose a fixed zoom level from `25%`, `50%`, `75%`, `100%`, `200%`, or `400%`
+- **View Original Image** (image tabs): Show a single 1x1 copy of the image for close inspection
+- **View Tiled Image** (image tabs): Show the image as a tiled 3x3 preview
 - **Display Using Custom Palette**: Load a `.lmp` palette and display all currently loaded WAD textures and image tabs using that palette
 - **Clear Custom Palette**: Revert display rendering back to each texture's original palette
 - **View in Separate Tab**: Open selected texture in an image viewer tab
@@ -109,19 +121,20 @@ python3 fcwadeditor.py
 
 #### Working with the Editor
 
-1. **Open a WAD file**: Use File → Open or press Ctrl+O
+1. **Open a WAD or BSP file**: Use File → Open or press Ctrl+O
 2. **Browse textures**: Scroll through the thumbnail grid
 3. **Select a texture**: Click once on any texture to select it
-4. **View a texture**: Double-click any texture to open it in a detailed viewer tab
-5. **Zoom in/out**: 
+4. **View a texture**: Double-click any texture to open it in a 3x3 tiled viewer tab
+5. **Switch display mode**: Use View → View Original Image or View → View Tiled Image while on an image tab
+6. **Zoom in/out**: 
    - Use mouse wheel while viewing an image
    - Press Ctrl+ to zoom in, Ctrl- to zoom out
-6. **Pan an image**: Click and drag to move around a zoomed image
-7. **Copy/Paste**: Select a texture, press Ctrl+C to copy, switch to another WAD tab, press Ctrl+V to paste
-8. **Import textures**: Use File → Import from WAD to select textures from another file
-9. **Import image files**: Use File → Import Image(s) to convert and add new textures from PNG/JPG/BMP/TGA/TIFF files
-10. **Reorder textures**: Drag and drop thumbnails to change WAD texture order
-11. **Save changes**: Press Ctrl+S or use File → Save
+7. **Pan an image**: Click and drag to move around a zoomed image
+8. **Copy/Paste**: Select a texture, press Ctrl+C to copy, switch to another WAD tab, press Ctrl+V to paste
+9. **Import textures**: Use File → Import from WAD to select textures from another file
+10. **Import image files**: Use File → Import Image(s) to convert and add new textures from PNG/JPG/BMP/TGA/TIFF files
+11. **Reorder textures**: Drag and drop thumbnails to change WAD texture order
+12. **Save changes**: Press Ctrl+S or use File → Save
 
 #### Tab Management
 
@@ -170,6 +183,14 @@ python3 fcwadtool.py --input map.bsp
 ```bash
 python3 fcwadtool.py -i /path/to/wads/*.wad -o merged.wad
 ```
+
+**Process multiple BSP files in one command:**
+
+```bash
+python3 fcwadtool.py -i /path/to/maps/*.bsp
+```
+
+The `--input` option accepts multiple files, directories, BSPs, and shell-expanded wildcard patterns. In bash/zsh, wildcards expand before the script runs; if you are using a different shell or passing patterns programmatically, make sure the pattern resolves to files before invoking the tool.
 
 ### Command Line Options
 
