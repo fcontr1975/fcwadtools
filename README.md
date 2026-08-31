@@ -212,7 +212,7 @@ The `--input` option accepts multiple files, directories, BSPs, and shell-expand
   - `3`: Halftone dithering
   - `4`: Closest Color Available (no dithering)
 - `--alpha`: Alpha channel handling mode
-  - `0`: Clipped alpha - transparent pixels become index 255 (default)
+  - `0`: Clipped alpha - only fully transparent pixels (alpha = 0) become index 255 (default)
   - `1`: Dithered alpha - apply dithering to alpha channel
   - `2`: Replace alpha with color
 - `--alphadither`: Alpha dithering mode (used with `--alpha 1`)
@@ -290,7 +290,8 @@ Each texture includes:
 
 - Texture names are limited to 15 characters (derived from filename)
 - Images are automatically converted to Quake's 256-color palette
-- Transparent pixels (alpha < 128) are handled according to alpha mode
+- Only fully transparent pixels (alpha = 0) are forced to palette index 255 in clipped mode; non-zero alpha pixels are quantized normally
+- Transparent textures should be named with a leading { for Quake-compatible masked rendering behavior
 - For best results with transparency, use PNG format with alpha channel
 
 ## Troubleshooting

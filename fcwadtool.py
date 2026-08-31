@@ -225,8 +225,15 @@ RANDOM_NOISE_LUT = [
     for value in range(256)
 ]
 
-ALPHA_TRANSPARENT_MASK_LUT = [255 if value < 128 else 0 for value in range(256)]
+# Only alpha == 0 is considered truly transparent for index 255 mapping.
+ALPHA_TRANSPARENT_MASK_LUT = [255 if value == 0 else 0 for value in range(256)]
 ORDERED_ALPHA_DITHER = getattr(Image.Dither, 'ORDERED', Image.Dither.FLOYDSTEINBERG)
+TRANSPARENT_PALETTE_INDEX = 255
+TRANSPARENT_TEXTURE_PREFIX = '{'
+TRANSPARENCY_NAME_WARNING = (
+    "Please make sure that your transparent textures are named with a '{' "
+    "as the first character to ensure that transparency works!"
+)
 
 QUAKE_FULL_PALETTE_IMAGE = _create_palette_image(QUAKE_FULL_PALETTE)
 QUAKE_NO_FULLBRIGHT_PALETTE_IMAGE = _create_palette_image(QUAKE_NO_FULLBRIGHT_PALETTE)
@@ -455,6 +462,70 @@ def _palette_bytes_from_quantized_image(quantized: Image.Image, index_remap_tabl
     if index_remap_table is not None:
         palette_data = palette_data.translate(index_remap_table)
     return palette_data
+
+
+def _build_transparency_index_mask(
+    image: Image.Image,
+    alpha_mode: int,
+    alpha_dither: int,
+) -> Optional[Image.Image]:
+    """Build an L mask (255=transparent) for pixels that must map to palette index 255."""
+    if image.mode != 'RGBA':
+        return None
+
+    alpha_channel = image.getchannel('A')
+
+    # Replacement mode intentionally burns alpha into RGB; no transparent index mapping.
+    if alpha_mode == 2:
+        return None
+
+    if alpha_mode == 1:
+        if alpha_dither == 0:
+            opaque_mask = alpha_channel.convert('1', dither=Image.Dither.FLOYDSTEINBERG).convert('L')
+        else:
+            opaque_mask = alpha_channel.convert('1', dither=ORDERED_ALPHA_DITHER).convert('L')
+        return ImageChops.invert(opaque_mask)
+
+    # In clipped mode, only fully transparent pixels get forced to index 255.
+    return alpha_channel.point(ALPHA_TRANSPARENT_MASK_LUT)
+
+
+def _count_masked_pixels(mask: Optional[Image.Image]) -> int:
+    """Count mask-covered pixels where mask value is 255."""
+    if mask is None:
+        return 0
+
+    histogram = mask.histogram()
+    if len(histogram) <= 255:
+        return 0
+
+    return int(histogram[255])
+
+
+def _force_palette_index_for_mask(
+    palette_data: bytes,
+    size: Tuple[int, int],
+    mask: Optional[Image.Image],
+    palette_index: int,
+) -> bytes:
+    """Force a palette index for all pixels covered by a mask."""
+    if mask is None:
+        return palette_data
+
+    width, height = size
+    if width <= 0 or height <= 0:
+        return palette_data
+
+    expected_size = width * height
+    if len(palette_data) != expected_size:
+        return palette_data
+
+    mask_l = mask if mask.mode == 'L' else mask.convert('L')
+    forced_index = max(0, min(255, int(palette_index)))
+
+    source_indices = Image.frombytes('L', size, palette_data)
+    forced_indices = Image.new('L', size, forced_index)
+    return Image.composite(forced_indices, source_indices, mask_l).tobytes()
 
 
 def floyd_steinberg_dither(image: Image.Image, palette: List[int], max_colors: Optional[int] = None) -> Image.Image:
@@ -692,10 +763,14 @@ def process_image(image_path: str, dithering: int, alpha_mode: int,
             include_fullbrights=include_fullbrights,
         )
         dithering_index = resolve_dithering_index(dithering)
+        transparent_index_mask: Optional[Image.Image] = None
+        transparent_pixel_count = 0
 
         # Process alpha channel if present
         stage_start = time.perf_counter()
         if img.mode == 'RGBA':
+            transparent_index_mask = _build_transparency_index_mask(img, alpha_mode, alpha_dither)
+            transparent_pixel_count = _count_masked_pixels(transparent_index_mask)
             img = process_alpha_channel(img, alpha_mode, alpha_dither, alpha_color, process_palette)
         else:
             img = img.convert('RGB')
@@ -752,7 +827,21 @@ def process_image(image_path: str, dithering: int, alpha_mode: int,
             palette_data = _palette_bytes_from_quantized_image(quantized, process_index_remap_table)
             timings['palette_seconds'] = time.perf_counter() - stage_start
 
+        if transparent_pixel_count > 0:
+            stage_start = time.perf_counter()
+            palette_data = _force_palette_index_for_mask(
+                palette_data,
+                (width, height),
+                transparent_index_mask,
+                TRANSPARENT_PALETTE_INDEX,
+            )
+            timings['palette_seconds'] += time.perf_counter() - stage_start
+
         timings['total_seconds'] = time.perf_counter() - total_start
+        has_transparency = transparent_pixel_count > 0
+        requires_transparent_name_prefix = (
+            has_transparency and not texture_name.startswith(TRANSPARENT_TEXTURE_PREFIX)
+        )
 
         if telemetry is not None:
             telemetry.clear()
@@ -768,6 +857,12 @@ def process_image(image_path: str, dithering: int, alpha_mode: int,
                 'alpha_mode': alpha_mode,
                 'palette_mode': resolved_palette_mode,
                 'include_fullbrights': bool(include_fullbrights),
+                'has_transparency': has_transparency,
+                'transparent_pixel_count': transparent_pixel_count,
+                'requires_transparent_name_prefix': requires_transparent_name_prefix,
+                'transparency_warning': (
+                    TRANSPARENCY_NAME_WARNING if requires_transparent_name_prefix else ''
+                ),
             })
         
         return (texture_name, width, height, palette_data)
@@ -784,6 +879,10 @@ def process_image(image_path: str, dithering: int, alpha_mode: int,
                 'alpha_mode': alpha_mode,
                 'palette_mode': palette_mode,
                 'include_fullbrights': bool(include_fullbrights),
+                'has_transparency': False,
+                'transparent_pixel_count': 0,
+                'requires_transparent_name_prefix': False,
+                'transparency_warning': '',
                 'error': str(e),
             })
         print(f"Error processing {image_path}: {e}")
@@ -1251,13 +1350,23 @@ def process_single_input(input_value: str, args: argparse.Namespace,
 
         for image_file in image_files:
             print(f"Processing: {image_file}")
+            telemetry = {}
             result = process_image(
                 image_file,
                 args.dithering,
                 args.alpha,
                 args.alphadither,
-                alpha_color
+                alpha_color,
+                telemetry=telemetry,
             )
+            if telemetry.get('has_transparency'):
+                transparent_pixel_count = int(telemetry.get('transparent_pixel_count', 0) or 0)
+                print(
+                    f"  Note: Mapped {transparent_pixel_count} transparent pixel(s) "
+                    f"to palette index {TRANSPARENT_PALETTE_INDEX}."
+                )
+                if telemetry.get('requires_transparent_name_prefix'):
+                    print(f"  Warning: {TRANSPARENCY_NAME_WARNING}")
             if result:
                 textures.append(result)
 

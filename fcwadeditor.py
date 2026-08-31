@@ -1767,6 +1767,33 @@ class WADEditor:
             DITHERING_INDEX_TO_LABEL[DEFAULT_EDITOR_OPTIONS['dithering_mode']]
         )
 
+    def _is_transparent_texture_name(self, texture_name: str) -> bool:
+        """Return whether a texture name follows Quake transparent naming rules."""
+        return bool(texture_name) and texture_name.startswith(fcwadtool.TRANSPARENT_TEXTURE_PREFIX)
+
+    def _show_transparency_name_warning(self, texture_names: List[str]):
+        """Warn when transparent textures are missing the leading '{' prefix."""
+        unique_names = []
+        for name in texture_names:
+            if isinstance(name, str) and name and name not in unique_names:
+                unique_names.append(name)
+
+        if not unique_names:
+            return
+
+        preview_limit = 8
+        preview_names = unique_names[:preview_limit]
+        texture_list = '\n'.join(f"- {name}" for name in preview_names)
+        if len(unique_names) > preview_limit:
+            texture_list += f"\n- ... and {len(unique_names) - preview_limit} more"
+
+        message = (
+            f"{fcwadtool.TRANSPARENCY_NAME_WARNING}\n\n"
+            "Transparent pixels were detected in:\n"
+            f"{texture_list}"
+        )
+        messagebox.showwarning('Transparent Texture Naming', message)
+
     def file_preferences(self):
         """Open the preferences dialog."""
         dialog = Toplevel(self.root)
@@ -2447,6 +2474,7 @@ class WADEditor:
             timing_samples = 0
             slowest_file = None
             slowest_total = 0.0
+            transparent_name_warnings: List[str] = []
 
             def fmt_seconds(seconds: float) -> str:
                 if seconds >= 1.0:
@@ -2516,6 +2544,20 @@ class WADEditor:
                         # Add to WAD (handles duplicate naming automatically)
                         wad.add_texture(texture)
                         imported_count += 1
+
+                        if telemetry.get('has_transparency'):
+                            transparent_pixels = int(telemetry.get('transparent_pixel_count', 0) or 0)
+                            self.root.after(
+                                0,
+                                progress_tab.log,
+                                (
+                                    f"  Info: Mapped {transparent_pixels} transparent pixel(s) "
+                                    f"to palette index {fcwadtool.TRANSPARENT_PALETTE_INDEX}."
+                                ),
+                            )
+
+                            if not self._is_transparent_texture_name(texture.name):
+                                transparent_name_warnings.append(texture.name)
                         
                         self.root.after(0, progress_tab.log, 
                                       f"  ✓ Success: {name} ({width}x{height})")
@@ -2599,6 +2641,10 @@ class WADEditor:
                         self.set_status(f"Imported {imported_count} images")
             
             self.root.after(0, refresh_wad)
+
+            if transparent_name_warnings:
+                warning_names = sorted(set(transparent_name_warnings), key=str.lower)
+                self.root.after(0, self._show_transparency_name_warning, warning_names)
         
         # Start the worker thread
         thread = threading.Thread(target=import_worker, daemon=True)
@@ -2893,12 +2939,14 @@ class WADEditor:
                 self.update_last_folder(filepath)
                 try:
                     # Process the image using fcwadtool functions
+                    telemetry = {}
                     result = fcwadtool.process_image(
                         filepath,
                         dithering_mode,
                         0,
                         0,
                         (0, 0, 0),
+                        telemetry=telemetry,
                         palette_mode=palette_mode,
                         custom_palette=custom_palette,
                         include_fullbrights=include_fullbrights,
@@ -2929,6 +2977,9 @@ class WADEditor:
                                 f"{self._dithering_mode_label(dithering_mode)})"
                             )
                         )
+
+                        if telemetry.get('has_transparency') and not self._is_transparent_texture_name(texture.name):
+                            self._show_transparency_name_warning([texture.name])
                     else:
                         messagebox.showerror("Error", "Failed to process image")
                 
