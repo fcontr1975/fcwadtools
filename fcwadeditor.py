@@ -6,6 +6,7 @@ A graphical application for viewing and editing Quake WAD files
 
 import sys
 import os
+import re
 import struct
 import io
 import json
@@ -22,6 +23,9 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import fcwadtool
 
 OPTIONS_FILENAME = 'options.cfg'
+ORIGINAL_WAD_DIRECTORY = Path('/mnt/userdata/Games/Quake/wads/original')
+UTILITY_TEXTURE_NAMES = frozenset({'skip', 'clip', 'trigger', 'sky'})
+UTILITY_TEXTURE_PREFIXES = ('sky',)
 
 PALETTE_OPTION_ITEMS = [
     ('Use Original Quake palette', fcwadtool.PALETTE_MODE_ORIGINAL),
@@ -69,6 +73,44 @@ DEFAULT_EDITOR_OPTIONS = {
 PALETTE_LMP_BYTE_COUNT = 768
 PALETTE_GRID_COLUMNS = 16
 PALETTE_GRID_COLOR_COUNT = 256
+
+
+def read_wad_texture_names(wad_path: Path) -> List[str]:
+    """Read texture names from a WAD directory without decoding image data."""
+    with wad_path.open('rb') as wad_file:
+        header = wad_file.read(12)
+        if len(header) != 12:
+            raise ValueError('WAD header is incomplete')
+
+        magic, entry_count, directory_offset = struct.unpack('<4sII', header)
+        if magic not in [b'WAD2', b'WAD3']:
+            raise ValueError(f'Not a valid WAD file (magic: {magic})')
+
+        wad_file.seek(directory_offset)
+        texture_names = []
+
+        for entry_index in range(entry_count):
+            directory_entry = wad_file.read(32)
+            if len(directory_entry) != 32:
+                raise ValueError(f'WAD directory entry {entry_index} is incomplete')
+
+            type_byte = directory_entry[12]
+            if type_byte not in [0x42, 0x43, 0x44]:
+                continue
+
+            name = directory_entry[16:32].split(b'\x00', 1)[0].decode('ascii', errors='ignore')
+            if name:
+                texture_names.append(name)
+
+        return texture_names
+
+
+def is_utility_texture_name(name: str) -> bool:
+    """Return whether a texture name should be preserved during ID cleanup."""
+    normalized_name = name.casefold()
+    return normalized_name in UTILITY_TEXTURE_NAMES or any(
+        normalized_name.startswith(prefix) for prefix in UTILITY_TEXTURE_PREFIXES
+    )
 
 class TextureData:
     """Represents a single texture in a WAD file"""
@@ -1464,6 +1506,10 @@ class WADEditor:
         file_menu.add_command(label="Import from WAD...", command=self.file_import)
         file_menu.add_command(label="Import Image(s)...", command=self.file_import_images)
         file_menu.add_command(label="Export...", command=self.file_export)
+        file_menu.add_command(
+            label="Export Image or Sequence as Sprite...",
+            command=self.file_export_sprite,
+        )
         file_menu.add_separator()
         file_menu.add_command(label="Close Tab", command=self.file_close, accelerator="Ctrl+W")
         file_menu.add_separator()
@@ -1476,6 +1522,8 @@ class WADEditor:
         edit_menu.add_command(label="Paste Texture", command=self.edit_paste, accelerator="Ctrl+V")
         edit_menu.add_separator()
         edit_menu.add_command(label="Delete", command=self.edit_delete, accelerator="Delete")
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Remove ID Textures", command=self.edit_remove_id_textures)
         edit_menu.add_separator()
         edit_menu.add_command(label="Rename Texture...", command=self.edit_rename)
         edit_menu.add_command(label="Resize Texture...", command=self.edit_resize)
@@ -2699,6 +2747,220 @@ class WADEditor:
         
         Button(dialog, text="Export", command=do_export).pack(side=LEFT, padx=10, pady=10)
         Button(dialog, text="Cancel", command=dialog.destroy).pack(side=RIGHT, padx=10, pady=10)
+
+    def file_export_sprite(self):
+        """Export selected image or image sequence as a Quake .spr sprite file."""
+        current_tab = self.notebook.select()
+        if not current_tab:
+            return
+
+        widget = self.notebook.nametowidget(current_tab)
+        if not isinstance(widget, WADViewerTab):
+            messagebox.showinfo(
+                "Info",
+                "Export Sprite only works in WAD viewer tabs with a selected texture",
+            )
+            return
+
+        selected_textures = widget.get_selected_textures()
+        if not selected_textures:
+            messagebox.showinfo("Info", "No texture selected")
+            return
+
+        # Group animated textures (+1name, +2name, ...) into sequences so a
+        # multi-selection exports as one animated sprite per sequence.
+        sequences = self._group_sprite_sequences(selected_textures)
+
+        if len(sequences) == 1:
+            sequence_name, frames = sequences[0]
+            self._show_sprite_export_dialog(sequence_name, frames)
+            return
+
+        # Multiple sequences: export each one as its own .spr file.
+        confirmed = messagebox.askyesno(
+            "Export Sprite Sequences",
+            (
+                f"Export {len(sequences)} sprite sequence(s) as separate .spr files?\n\n"
+                "Each sequence will be saved next to a chosen base file."
+            ),
+        )
+        if not confirmed:
+            return
+
+        base_filepath = filedialog.asksaveasfilename(
+            title="Export Sprite Sequences",
+            defaultextension=".spr",
+            filetypes=[("Quake Sprite Files", "*.spr"), ("All Files", "*.*")],
+            initialdir=self.get_dialog_initial_dir(),
+        )
+        if not base_filepath:
+            return
+
+        self.update_last_folder(base_filepath)
+        base_path = Path(base_filepath)
+        exported = 0
+        failed_sequences = []
+
+        for sequence_name, frames in sequences:
+            if len(sequences) == 1:
+                output_path = base_path
+            else:
+                output_path = base_path.with_name(
+                    f"{base_path.stem}_{self._sanitize_sprite_filename(sequence_name)}{base_path.suffix}"
+                )
+
+            try:
+                fcwadtool.create_sprite(
+                    [(name, width, height, data) for name, width, height, data, _palette in frames],
+                    str(output_path),
+                )
+                exported += 1
+            except Exception as e:
+                failed_sequences.append(f"{sequence_name}: {str(e)}")
+
+        if exported > 0:
+            self.set_status(f"Exported {exported} sprite file(s)")
+
+        if failed_sequences:
+            messagebox.showerror(
+                "Sprite Export Failed",
+                "Some sequences could not be exported:\n" + "\n".join(failed_sequences),
+            )
+
+    def _group_sprite_sequences(self, textures: List[TextureData]):
+        """Group selected textures into (sequence_name, frames) lists.
+
+        Animated textures named like ``+1button01`` / ``+2button01`` belong to
+        one sequence and are ordered by their frame number. Regular textures
+        each form their own single-frame sequence.
+        """
+        animated: Dict[str, List[Tuple[int, TextureData]]] = {}
+        regular: List[Tuple[str, TextureData]] = []
+
+        for texture in textures:
+            match = re.match(r'^\+(\d+)(.*)$', texture.name)
+            if match:
+                frame_number = int(match.group(1))
+                base_name = match.group(2) or texture.name
+                animated.setdefault(base_name.casefold(), []).append((frame_number, texture))
+            else:
+                regular.append((texture.name, texture))
+
+        sequences = []
+
+        for base_key, entries in animated.items():
+            entries.sort(key=lambda entry: (entry[0], entry[1].name.casefold()))
+            display_name = entries[0][1].name
+            frames = [(texture.name, texture.width, texture.height, texture.data, texture.palette)
+                      for _frame_number, texture in entries]
+            sequences.append((display_name, frames))
+
+        for name, texture in regular:
+            sequences.append((
+                name,
+                [(texture.name, texture.width, texture.height, texture.data, texture.palette)],
+            ))
+
+        return sequences
+
+    @staticmethod
+    def _sanitize_sprite_filename(name: str) -> str:
+        """Return a filesystem-safe component derived from a texture name."""
+        sanitized = re.sub(r'[^A-Za-z0-9_-]+', '_', name).strip('_')
+        return sanitized or 'sprite'
+
+    def _show_sprite_export_dialog(self, sequence_name: str, frames):
+        """Show the sprite export dialog for a single sequence."""
+        frame_count = len(frames)
+        if frame_count == 1:
+            title = f"Export Sprite: {sequence_name}"
+            summary = f"Export 1 frame ({frames[0][1]}x{frames[0][2]}) as a Quake .spr sprite."
+        else:
+            title = f"Export Sprite Sequence: {sequence_name}"
+            summary = (
+                f"Export {frame_count} frames as an animated Quake .spr sprite.\n"
+                f"Frame size: {frames[0][1]}x{frames[0][2]}"
+            )
+
+        dialog = Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("420x260")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        Label(dialog, text=summary, font=('Arial', 10), justify=LEFT, wraplength=380).pack(
+            anchor=W, padx=16, pady=(14, 8)
+        )
+
+        Label(dialog, text="Sprite orientation:", font=('Arial', 10, 'bold')).pack(anchor=W, padx=16)
+        sprite_type_var = IntVar(value=fcwadtool.SPRITE_TYPE_VP_PARALLEL)
+        for sprite_type, label in (
+            (fcwadtool.SPRITE_TYPE_VP_PARALLEL, 'VP Parallel (always faces the viewer)'),
+            (fcwadtool.SPRITE_TYPE_VP_PARALLEL_UPRIGHT, 'VP Parallel Upright (stands upright, faces viewer)'),
+            (fcwadtool.SPRITE_TYPE_FACING_UPRIGHT, 'Facing Upright (always upright)'),
+            (fcwadtool.SPRITE_TYPE_ORIENTED, 'Oriented (uses entity angles)'),
+            (fcwadtool.SPRITE_TYPE_VP_PARALLEL_ORIENTED, 'VP Parallel Oriented'),
+        ):
+            Radiobutton(
+                dialog,
+                text=label,
+                variable=sprite_type_var,
+                value=sprite_type,
+                anchor=W,
+                justify=LEFT,
+            ).pack(anchor=W, padx=28)
+
+        interval_frame = Frame(dialog)
+        interval_frame.pack(fill=X, padx=16, pady=(10, 0))
+        Label(interval_frame, text="Frame interval (seconds):").pack(side=LEFT, padx=(0, 8))
+        interval_var = StringVar(value='0.1')
+        interval_entry = Entry(interval_frame, textvariable=interval_var, width=8)
+        interval_entry.pack(side=LEFT)
+
+        def do_export():
+            try:
+                frame_interval = float(interval_var.get().strip())
+            except ValueError:
+                messagebox.showerror("Error", "Frame interval must be a number (e.g. 0.1)")
+                return
+            if frame_interval <= 0:
+                messagebox.showerror("Error", "Frame interval must be greater than 0")
+                return
+
+            default_name = self._sanitize_sprite_filename(sequence_name)
+            filepath = filedialog.asksaveasfilename(
+                title="Export Sprite File",
+                defaultextension=".spr",
+                initialfile=f"{default_name}.spr",
+                filetypes=[("Quake Sprite Files", "*.spr"), ("All Files", "*.*")],
+                initialdir=self.get_dialog_initial_dir(),
+            )
+            if not filepath:
+                return
+
+            self.update_last_folder(filepath)
+
+            try:
+                self.set_status(f"Exporting sprite to {filepath}...")
+                fcwadtool.create_sprite(
+                    [(name, width, height, data) for name, width, height, data, _palette in frames],
+                    filepath,
+                    sprite_type=sprite_type_var.get(),
+                    frame_interval=frame_interval,
+                )
+                self.set_status(f"Exported sprite: {filepath}")
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export sprite:\n{str(e)}")
+                self.set_status("Error exporting sprite")
+
+        button_frame = Frame(dialog)
+        button_frame.pack(side=BOTTOM, pady=10)
+        Button(button_frame, text="Export", command=do_export, width=10).pack(side=LEFT, padx=5)
+        Button(button_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=LEFT, padx=5)
+
+        dialog.bind('<Return>', lambda _event: do_export())
+        dialog.bind('<Escape>', lambda _event: dialog.destroy())
     
     def file_close(self):
         """Close current tab"""
@@ -2830,31 +3092,38 @@ class WADEditor:
             messagebox.showinfo("Info", "Delete only works in WAD viewer tabs")
     
     def edit_resize(self):
-        """Resize selected texture"""
+        """Resize selected texture(s)"""
         current_tab = self.notebook.select()
         if not current_tab:
             return
         
         widget = self.notebook.nametowidget(current_tab)
         if isinstance(widget, WADViewerTab):
-            texture = widget.get_selected_texture()
-            if not texture:
+            selected_textures = widget.get_selected_textures()
+            if not selected_textures:
                 messagebox.showinfo("Info", "No texture selected")
                 return
 
+            primary_texture = selected_textures[0]
+            selected_count = len(selected_textures)
+
             palette_mode, custom_palette, include_fullbrights = self.get_import_palette_settings()
+            dithering_mode = self.get_import_dithering_mode()
             
             # Create resize dialog
             dialog = Toplevel(self.root)
-            dialog.title(f"Resize {texture.name}")
+            if selected_count == 1:
+                dialog.title(f"Resize {primary_texture.name}")
+            else:
+                dialog.title(f"Resize {selected_count} Textures")
             dialog.geometry("300x150")
             
             Label(dialog, text="New Width:").grid(row=0, column=0, padx=10, pady=10)
-            width_var = IntVar(value=texture.width)
+            width_var = IntVar(value=primary_texture.width)
             Entry(dialog, textvariable=width_var).grid(row=0, column=1, padx=10, pady=10)
             
             Label(dialog, text="New Height:").grid(row=1, column=0, padx=10, pady=10)
-            height_var = IntVar(value=texture.height)
+            height_var = IntVar(value=primary_texture.height)
             Entry(dialog, textvariable=height_var).grid(row=1, column=1, padx=10, pady=10)
             
             def do_resize():
@@ -2866,26 +3135,100 @@ class WADEditor:
                     return
                 
                 try:
-                    # Resize the image
-                    resized_img = texture.image.resize((new_width, new_height), Image.Resampling.NEAREST)
-                    
-                    # Convert back to palette data using selected palette mode.
-                    _, process_palette, process_color_count, _, _ = fcwadtool.resolve_process_palette(
+                    # Step 1: resolve conversion settings once for the whole batch.
+                    (
+                        _,
+                        process_palette,
+                        process_color_count,
+                        process_palette_image,
+                        process_index_remap_table,
+                    ) = fcwadtool.resolve_process_palette(
                         palette_mode,
                         custom_palette=custom_palette,
                         include_fullbrights=include_fullbrights,
                     )
-                    new_data = fcwadtool.convert_to_palette(
-                        resized_img,
-                        process_palette,
-                        max_colors=process_color_count,
-                    )
-                    
-                    # Update texture
-                    texture.width = new_width
-                    texture.height = new_height
-                    texture.data = new_data
-                    texture._generate_image()
+                    dithering_index = fcwadtool.resolve_dithering_index(dithering_mode)
+
+                    resized_count = 0
+                    failed_textures = []
+
+                    for texture in selected_textures:
+                        try:
+                            # Step 2: convert to RGB for a clean colour source.
+                            rgb_img = texture.image.convert('RGB')
+
+                            # Step 3: smooth resize using high-quality Lanczos resampling.
+                            resized_img = rgb_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                            # Step 4: convert to Quake palette using the user's chosen settings.
+                            if dithering_index == fcwadtool.DITHERING_INDEX_ERROR_DIFFUSION:
+                                quantized = resized_img.quantize(
+                                    palette=process_palette_image,
+                                    dither=Image.Dither.FLOYDSTEINBERG,
+                                )
+                                new_data = quantized.tobytes()
+                                if process_index_remap_table is not None:
+                                    new_data = new_data.translate(process_index_remap_table)
+                            elif dithering_index == fcwadtool.DITHERING_INDEX_CLOSEST_COLOR:
+                                quantized = resized_img.quantize(
+                                    palette=process_palette_image,
+                                    dither=Image.Dither.NONE,
+                                )
+                                new_data = quantized.tobytes()
+                                if process_index_remap_table is not None:
+                                    new_data = new_data.translate(process_index_remap_table)
+                            elif dithering_index == fcwadtool.DITHERING_INDEX_RANDOM:
+                                noisy_img = fcwadtool.random_dither(
+                                    resized_img, process_palette, max_colors=process_color_count
+                                )
+                                quantized = noisy_img.quantize(
+                                    palette=process_palette_image,
+                                    dither=Image.Dither.NONE,
+                                )
+                                new_data = quantized.tobytes()
+                                if process_index_remap_table is not None:
+                                    new_data = new_data.translate(process_index_remap_table)
+                            elif dithering_index == fcwadtool.DITHERING_INDEX_ORDERED:
+                                prepped = fcwadtool.ordered_dither(
+                                    resized_img, process_palette, max_colors=process_color_count
+                                )
+                                quantized = prepped.quantize(
+                                    palette=process_palette_image,
+                                    dither=Image.Dither.NONE,
+                                )
+                                new_data = fcwadtool._palette_bytes_from_quantized_image(
+                                    quantized, process_index_remap_table
+                                )
+                            else:  # DITHERING_INDEX_HALFTONE or fallback
+                                prepped = fcwadtool.halftone_dither(
+                                    resized_img, process_palette, max_colors=process_color_count
+                                )
+                                quantized = prepped.quantize(
+                                    palette=process_palette_image,
+                                    dither=Image.Dither.NONE,
+                                )
+                                new_data = fcwadtool._palette_bytes_from_quantized_image(
+                                    quantized, process_index_remap_table
+                                )
+
+                            # Update texture
+                            texture.width = new_width
+                            texture.height = new_height
+                            texture.data = new_data
+                            texture._generate_image()
+                            resized_count += 1
+                        except Exception:
+                            failed_textures.append(texture.name)
+
+                    if resized_count == 0:
+                        if failed_textures:
+                            messagebox.showerror(
+                                "Error",
+                                "Failed to resize selected textures:\n" + ", ".join(failed_textures),
+                            )
+                        else:
+                            messagebox.showerror("Error", "Failed to resize selected textures")
+                        return
                     
                     # Mark as modified
                     tab_id = str(current_tab)
@@ -2897,12 +3240,26 @@ class WADEditor:
                     widget.refresh()
                     
                     dialog.destroy()
-                    self.set_status(
-                        (
-                            f"Resized {texture.name} to {new_width}x{new_height} "
-                            f"({self._palette_mode_runtime_label(palette_mode, include_fullbrights)})"
+                    if resized_count == 1 and selected_count == 1:
+                        self.set_status(
+                            (
+                                f"Resized {primary_texture.name} to {new_width}x{new_height} "
+                                f"({self._palette_mode_runtime_label(palette_mode, include_fullbrights)})"
+                            )
                         )
-                    )
+                    else:
+                        self.set_status(
+                            (
+                                f"Resized {resized_count} texture(s) to {new_width}x{new_height} "
+                                f"({self._palette_mode_runtime_label(palette_mode, include_fullbrights)})"
+                            )
+                        )
+
+                    if failed_textures:
+                        messagebox.showwarning(
+                            "Resize Completed with Errors",
+                            "Some textures failed to resize:\n" + ", ".join(failed_textures),
+                        )
                 
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to resize:\n{str(e)}")
@@ -2986,6 +3343,30 @@ class WADEditor:
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to reimport:\n{str(e)}")
 
+    @staticmethod
+    def _animated_texture_sort_key(name: str):
+        """Build a sort key that keeps animated texture sequences grouped.
+
+        Animated textures look like ``+1button01`` / ``+2button01`` where the
+        digits after ``+`` are the frame number in the sequence and the rest is
+        the real texture name. Sorting those by their raw name scatters the
+        frames of one sequence across the WAD, so instead:
+
+        1. Textures starting with ``+`` are detected and split into
+           ``(frame number, base name)``.
+        2. Everything is ordered by the base name (animated textures use the
+           name after the frame digits, so they sort alphabetically alongside
+           regular textures).
+        3. Frames of the same base name are then grouped together in sequence
+           order (``+1button01, +2button01, +3button01, +1button02, ...``).
+        """
+        match = re.match(r'^\+(\d+)(.*)$', name)
+        if match:
+            frame_number = int(match.group(1))
+            base_name = match.group(2)
+            return (base_name.casefold(), frame_number, name.casefold())
+        return (name.casefold(), -1, name.casefold())
+
     def edit_sort_textures_alphabetically(self):
         """Sort textures alphabetically in the current WAD"""
         current_tab = self.notebook.select()
@@ -3007,7 +3388,7 @@ class WADEditor:
             return
 
         original_order = [texture.name for texture in wad.textures]
-        wad.textures.sort(key=lambda texture: texture.name.lower())
+        wad.textures.sort(key=lambda texture: self._animated_texture_sort_key(texture.name))
         sorted_order = [texture.name for texture in wad.textures]
 
         if original_order == sorted_order:
@@ -3023,6 +3404,112 @@ class WADEditor:
         widget.refresh()
 
         self.set_status("Sorted textures alphabetically")
+
+    def _scan_original_texture_names(self) -> Tuple[set, int, List[str]]:
+        """Scan the configured original-WAD directory for texture names."""
+        if not ORIGINAL_WAD_DIRECTORY.is_dir():
+            raise FileNotFoundError(
+                f'Original WAD directory does not exist: {ORIGINAL_WAD_DIRECTORY}'
+            )
+
+        wad_paths = sorted(
+            (
+                path
+                for path in ORIGINAL_WAD_DIRECTORY.rglob('*')
+                if path.is_file() and path.suffix.lower() == '.wad'
+            ),
+            key=lambda path: str(path).casefold(),
+        )
+        if not wad_paths:
+            raise FileNotFoundError(
+                f'No WAD files found in original WAD directory: {ORIGINAL_WAD_DIRECTORY}'
+            )
+
+        texture_names = set()
+        failed_wads = []
+        for wad_path in wad_paths:
+            try:
+                texture_names.update(
+                    name.casefold() for name in read_wad_texture_names(wad_path)
+                )
+            except (OSError, ValueError) as error:
+                failed_wads.append(f'{wad_path.name}: {error}')
+
+        return texture_names, len(wad_paths) - len(failed_wads), failed_wads
+
+    def edit_remove_id_textures(self):
+        """Remove original Quake texture names from the active WAD tab."""
+        current_tab = self.notebook.select()
+        if not current_tab:
+            return
+
+        widget = self.notebook.nametowidget(current_tab)
+        if not isinstance(widget, WADViewerTab):
+            messagebox.showinfo("Info", "Remove ID Textures only works in WAD viewer tabs")
+            return
+
+        tab_id = str(current_tab)
+        if tab_id not in self.wad_files:
+            return
+
+        try:
+            original_texture_names, scanned_wad_count, failed_wads = (
+                self._scan_original_texture_names()
+            )
+        except (FileNotFoundError, OSError) as error:
+            messagebox.showerror("Original WADs Not Found", str(error))
+            return
+
+        wad = self.wad_files[tab_id]
+        if not original_texture_names and failed_wads:
+            messagebox.showerror(
+                "Original WAD Scan Failed",
+                (
+                    "Could not read any texture names from the original WADs.\n\n"
+                    + "\n".join(failed_wads)
+                ),
+            )
+            return
+
+        removable_indices = [
+            index
+            for index, texture in enumerate(wad.textures)
+            if texture.name.casefold() in original_texture_names
+            and not is_utility_texture_name(texture.name)
+        ]
+
+        if not removable_indices:
+            self.set_status(
+                f"No ID textures found (scanned {scanned_wad_count} original WAD(s))"
+            )
+            return
+
+        warning = ""
+        if failed_wads:
+            warning = f"\n\nCould not scan {len(failed_wads)} original WAD(s)."
+
+        confirmed = messagebox.askyesno(
+            "Remove ID Textures",
+            (
+                f"Remove {len(removable_indices)} texture(s) matching the original "
+                f"Quake WADs?\n\nUtility textures (skip, clip, trigger, sky) "
+                f"will be preserved.{warning}"
+            ),
+        )
+        if not confirmed:
+            return
+
+        for index in reversed(removable_indices):
+            del wad.textures[index]
+
+        wad.modified = True
+        widget.selected_indices.clear()
+        widget.last_selected_index = None
+        widget.refresh()
+        self.update_tab_title(tab_id)
+        self.set_status(
+            f"Removed {len(removable_indices)} ID texture(s); preserved utility textures"
+        )
     
     def edit_rename(self):
         """Rename selected texture"""

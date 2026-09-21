@@ -465,6 +465,44 @@ When the current tab is an image, largeet's add a menu item under "View" : "Set 
 
 Let's make the "File" : "Open" file requester also accept .bsp files. When loading a .bsp, a new unsaved wad file should be created containing all the textures used in that .BSP file. 
 
+============
+
+Hi Copilot, I encountered an issue with importing .png images that have transparency, let's ensure that any images with transparency (any pixel with alpha of 1) are handled correctly by the importer: It should map any transparency to color #255 in the color table and maybe even ensure the user gets a message like "Please make sure that your transparent textures are named with a '{' as the first character to ensure that transparency works!"
+
+============
+
+Ok, great, importing works, but maybe we adjusted the transparency too aggressively, let's only give the 255 value to any pixels that are fully, truly transparent. Anything else should get translated normally to a Quake palette color. 
+
+============
+
+Hi copilot! On resize operations in the thumbail or image view, let's ensure that textures resize smoothly by doing the following:
+
+Convert image to RGB mode
+Resize to desired dimensions
+Convert image to Quake palette while respecting the user's chosen settings.
+
+
+
+
+
+============
+
+I would like to add a toolbar to easily turn some of the preferences on and off. Let's add a toolbar that contains square tool/preference icons that are 32px x 32px and load png files that are read from the application folder. The icon order should be as follows (with the name of the file tgo be read in and displayed on the toolbar button in parentheses):
+
+New wad (new.png)
+Save wad (save.png)
+Spacer (spacer.png)
+Import from wad (import_w.png)
+Import from images (import_i.png)
+Spacer (spacer.png)
+Quake Full Palette (qfull.png)
+Quake No Fullbright Palette (qnofull.png)
+Spacer (spacer.png)
+Use Ordered Dithering (useordered.png)
+Use Error Difusion Dithering (useerror.png)
+Use Random Dithering (userandom.png)
+Use Halftone Dithering (usehalftone.png)
+No Dithering (useclosest.png) 
 
 ============
 
@@ -472,3 +510,92 @@ I want to add drawing features to the image display. When a user double clicks a
 
 A square button for our pencil tool.
 A color square that will pop up a copy of the current palette we can use to 
+
+=========
+
+Hi Copilot, in the thumbnail view, let's make it so that if the user has several textures selected and does a resize operation, all the selected textures are resized to the user's specification.
+
+=========
+
+Hi Copilot, can we add a feature under "EDIT: Remove id textures" that will remove any textures matching the names of the textures in the original Quake and its misison packs so that we can clean up user-made wads to just the textures that are user-made (this utility should not remove the utility textures like: skip, clip, trigger and sky). In order to build a list of the original textures, we could scan the folder here: /mnt/userdata/Games/Quake/wads/original/ containing all the original quake wads, and build a list of all the textures contained therein that we can target for removal when we wish to clean up wads.
+
+=========
+
+Ok, that was great. Now we need to sort animated textures better than we currently do. Animated textures are tough to sort because they come in with names like:
+
++1button01
++1button02
++2button01
++2button02
++3button01
++3button02
+
+With the + letting the engine know that this is an animated texture, the second number is the frame number of the image in the sequence and the last part (after + and number) being the actual name of the texture we should be sorting. So, my idea to sort these is: 
+
+1. Let's first finds any textures starting with +
+
+Like so:
+
++1button01
++1button02
++2button01
++2button02
++3button01
++3button02
+
+2. Sort images on the basis of the alphabetical name that starts after the number/numbers following the +
+
+Like so:
+
++1button01
++2button01
++3button01
++2button02
++1button02
++3button02
+
+3. Finally, once the images are sorted by their proper names, we sort them in groups by their place in the sequence.
+
+Like so:
+
++1button01
++2button01
++3button01
++1button02
++2button02
++3button02
+
+That way, all of our textures will be sorted alphabetically, but will be grouped in individual sequences, which is the desired outcome.
+
+==========
+
+I would like to add a new feature under file: "Export image or sequence as sprite file". This would simply export the selected image or image sequence as a Quake .spr file. Can you implement?
+
+==========
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

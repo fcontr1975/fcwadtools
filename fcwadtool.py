@@ -723,6 +723,95 @@ def create_wad(textures: List[Tuple[str, int, int, bytes]], output_path: str, wa
     print(f"Created {wad_format} file: {output_path} with {len(textures)} texture(s)")
 
 
+# Quake sprite (.spr) constants, matching id Software's spritegn.h.
+SPRITE_HEADER_MAGIC = b'IDSP'  # IDSPRITEHEADER, little-endian "IDSP"
+SPRITE_VERSION = 1
+SPRITE_TYPE_VP_PARALLEL_UPRIGHT = 0
+SPRITE_TYPE_FACING_UPRIGHT = 1
+SPRITE_TYPE_VP_PARALLEL = 2
+SPRITE_TYPE_ORIENTED = 3
+SPRITE_TYPE_VP_PARALLEL_ORIENTED = 4
+SPRITE_FRAMETYPE_SINGLE = 0
+SPRITE_FRAMETYPE_GROUP = 1
+SPRITE_SYNCTYPE_SYNC = 0
+SPRITE_SYNCTYPE_RAND = 1
+
+SPRITE_TYPE_LABELS = {
+    SPRITE_TYPE_VP_PARALLEL_UPRIGHT: 'VP Parallel Upright',
+    SPRITE_TYPE_FACING_UPRIGHT: 'Facing Upright',
+    SPRITE_TYPE_VP_PARALLEL: 'VP Parallel',
+    SPRITE_TYPE_ORIENTED: 'Oriented',
+    SPRITE_TYPE_VP_PARALLEL_ORIENTED: 'VP Parallel Oriented',
+}
+
+
+def create_sprite(frames: List[Tuple[str, int, int, bytes]], output_path: str,
+                  sprite_type: int = SPRITE_TYPE_VP_PARALLEL,
+                  synctype: int = SPRITE_SYNCTYPE_SYNC,
+                  frame_interval: float = 0.1):
+    """Create a Quake .spr sprite file from palette-index frames.
+
+    Each frame is a (name, width, height, palette_data) tuple, matching the
+    texture tuple format used by create_wad(). Frames are written as
+    SPR_SINGLE entries; when more than one frame is supplied the engine
+    animates them in sequence order.
+
+    File layout (all little-endian), per spritegn.h:
+      dsprite_t header: ident 'IDSP', version 1, type, boundingradius,
+                        width, height, numframes, beamlength, synctype
+      per frame:        frametype (SPR_SINGLE), origin[2], width, height,
+                        width*height palette-index bytes
+    """
+    if not frames:
+        raise ValueError("Cannot create a sprite with no frames")
+
+    sprite_type = max(0, min(4, int(sprite_type)))
+    synctype = max(0, min(1, int(synctype)))
+    frame_interval = max(0.001, float(frame_interval))
+
+    # The header width/height describe the largest frame in the sprite.
+    max_width = max(width for _name, width, _height, _data in frames)
+    max_height = max(height for _name, _width, height, _data in frames)
+    bounding_radius = (max_width * max_width + max_height * max_height) ** 0.5 / 2.0
+
+    with open(output_path, 'wb') as f:
+        f.write(struct.pack(
+            '<4sIIfIIIfI',
+            SPRITE_HEADER_MAGIC,
+            SPRITE_VERSION,
+            sprite_type,
+            bounding_radius,
+            max_width,
+            max_height,
+            len(frames),
+            0.0,  # beamlength (unused by the engine)
+            synctype,
+        ))
+
+        for name, width, height, data in frames:
+            expected_size = width * height
+            if len(data) < expected_size:
+                data = data + (b'\x00' * (expected_size - len(data)))
+            elif len(data) > expected_size:
+                data = data[:expected_size]
+
+            # Frame origin is the pixel offset from the sprite center to the
+            # top-left corner, so the frame is centered on the entity origin.
+            origin_x = -(width // 2)
+            origin_y = height // 2
+
+            f.write(struct.pack('<I', SPRITE_FRAMETYPE_SINGLE))
+            f.write(struct.pack('<iiII', origin_x, origin_y, width, height))
+            f.write(bytes(data))
+
+    frame_word = "frame" if len(frames) == 1 else "frames"
+    print(
+        f"Created Quake sprite file: {output_path} "
+        f"({len(frames)} {frame_word}, {max_width}x{max_height}, "
+        f"{SPRITE_TYPE_LABELS.get(sprite_type, 'VP Parallel')})"
+    )
+
+
 def process_image(image_path: str, dithering: int, alpha_mode: int,
                  alpha_dither: int, alpha_color: Tuple[int, int, int],
                  telemetry: Optional[dict] = None,

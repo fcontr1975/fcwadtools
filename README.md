@@ -84,6 +84,7 @@ python3 fcwadeditor.py
 - **Import from WAD**: Load textures from another WAD file into the current one
 - **Import Image(s)**: Import one or more image files as textures into the current WAD
 - **Export**: Export the current WAD file in a specific format (BSP2/BSP3)
+- **Export Image or Sequence as Sprite**: Export the selected texture(s) as a Quake `.spr` sprite file. Animated textures (`+1name`, `+2name`, ...) are grouped into sequences and exported as animated sprites; multiple selections export one `.spr` per sequence. The dialog lets you choose the sprite orientation (VP Parallel, Facing Upright, etc.) and the animation frame interval.
 - **Close Tab** (Ctrl+W): Close the current tab
 - **Exit**: Close the application (prompts to save unsaved changes)
 
