@@ -23,7 +23,8 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import fcwadtool
 
 OPTIONS_FILENAME = 'options.cfg'
-ORIGINAL_WAD_DIRECTORY = Path('/mnt/userdata/Games/Quake/wads/original')
+BLACKLIST_DIRECTORY = Path(__file__).resolve().parent / 'blacklists'
+BLACKLIST_PATH = BLACKLIST_DIRECTORY / 'blacklist.txt'
 UTILITY_TEXTURE_NAMES = frozenset({'skip', 'clip', 'trigger', 'sky'})
 UTILITY_TEXTURE_PREFIXES = ('sky',)
 
@@ -73,36 +74,6 @@ DEFAULT_EDITOR_OPTIONS = {
 PALETTE_LMP_BYTE_COUNT = 768
 PALETTE_GRID_COLUMNS = 16
 PALETTE_GRID_COLOR_COUNT = 256
-
-
-def read_wad_texture_names(wad_path: Path) -> List[str]:
-    """Read texture names from a WAD directory without decoding image data."""
-    with wad_path.open('rb') as wad_file:
-        header = wad_file.read(12)
-        if len(header) != 12:
-            raise ValueError('WAD header is incomplete')
-
-        magic, entry_count, directory_offset = struct.unpack('<4sII', header)
-        if magic not in [b'WAD2', b'WAD3']:
-            raise ValueError(f'Not a valid WAD file (magic: {magic})')
-
-        wad_file.seek(directory_offset)
-        texture_names = []
-
-        for entry_index in range(entry_count):
-            directory_entry = wad_file.read(32)
-            if len(directory_entry) != 32:
-                raise ValueError(f'WAD directory entry {entry_index} is incomplete')
-
-            type_byte = directory_entry[12]
-            if type_byte not in [0x42, 0x43, 0x44]:
-                continue
-
-            name = directory_entry[16:32].split(b'\x00', 1)[0].decode('ascii', errors='ignore')
-            if name:
-                texture_names.append(name)
-
-        return texture_names
 
 
 def is_utility_texture_name(name: str) -> bool:
@@ -478,6 +449,13 @@ class ImageViewerTab(Frame):
         self.drag_start = None
         self.canvas.config(cursor='')
 
+    def destroy(self):
+        """Release image references before destroying this tab."""
+        self.photo_image = None
+        self.image_ids = []
+        self.texture = None
+        super().destroy()
+
 
 class WADViewerTab(Frame):
     """Tab for viewing textures in a WAD file"""
@@ -506,10 +484,9 @@ class WADViewerTab(Frame):
         self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
         self.scrollbar.pack(side=RIGHT, fill=Y)
         
-        # Bind mousewheel to canvas
-        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel)
-        self.canvas.bind_all('<Button-4>', self._on_mousewheel)
-        self.canvas.bind_all('<Button-5>', self._on_mousewheel)
+        # Bind wheel events only inside this tab to avoid global callback leaks.
+        self._bind_mousewheel(self.canvas)
+        self._bind_mousewheel(self.scrollable_frame)
         
         # Bind window resize to refresh layout
         self.bind('<Configure>', self._on_resize)
@@ -530,6 +507,12 @@ class WADViewerTab(Frame):
         self.drag_in_progress = False
         self.drag_threshold = 8
         self.refresh()
+
+    def _bind_mousewheel(self, widget):
+        """Bind mousewheel handlers to a widget local to this tab."""
+        widget.bind('<MouseWheel>', self._on_mousewheel)
+        widget.bind('<Button-4>', self._on_mousewheel)
+        widget.bind('<Button-5>', self._on_mousewheel)
     
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
@@ -537,6 +520,7 @@ class WADViewerTab(Frame):
             self.canvas.yview_scroll(-1, 'units')
         elif event.num == 5 or event.delta < 0:
             self.canvas.yview_scroll(1, 'units')
+        return 'break'
     
     def _on_resize(self, event):
         """Handle window resize to recalculate columns"""
@@ -619,6 +603,10 @@ class WADViewerTab(Frame):
             frame.bind('<Double-Button-1>', make_double_click_handler(i))
             label.bind('<Double-Button-1>', make_double_click_handler(i))
             info_label.bind('<Double-Button-1>', make_double_click_handler(i))
+
+            self._bind_mousewheel(frame)
+            self._bind_mousewheel(label)
+            self._bind_mousewheel(info_label)
             
             # Bind single click for selection
             def make_press_handler(idx, frm):
@@ -658,6 +646,17 @@ class WADViewerTab(Frame):
                 frame.configure(relief=SUNKEN, borderwidth=4)
             
             self.texture_frames.append(frame)
+
+    def destroy(self):
+        """Release tab references that can pin large WAD/image objects."""
+        self.texture_frames = []
+        self.widget_to_index = {}
+        self.selected_indices.clear()
+        self.last_selected_index = None
+        self.wad = None
+        self.on_texture_double_click = None
+        self.editor = None
+        super().destroy()
 
     def on_texture_press(self, index: int, frame: Frame, event):
         """Handle mouse press on a texture tile"""
@@ -1010,12 +1009,7 @@ class ImportProgressTab(Frame):
     
     def close_tab(self):
         """Close this progress tab"""
-        tab_id = str(self)
-        # Find and close this tab
-        for i in range(self.editor.notebook.index('end')):
-            if str(self.editor.notebook.nametowidget(self.editor.notebook.tabs()[i])) == tab_id:
-                self.editor.notebook.forget(i)
-                break
+        self.editor._destroy_notebook_tab(str(self))
 
 
 class PaletteEditorTab(Frame):
@@ -1448,7 +1442,7 @@ class WADEditor:
         
         # Data structures
         self.wad_files: Dict[str, WADFile] = {}  # tab_id -> WADFile
-        self.clipboard_textures: List[TextureData] = []  # Changed to list for multi-copy
+        self.clipboard_textures: List[Tuple[str, int, int, bytes, List[int]]] = []
         self.palette_editor_tab_id: Optional[str] = None
         self.display_palette_file: str = ''
         self.options_path = Path(__file__).resolve().parent / OPTIONS_FILENAME
@@ -1505,7 +1499,9 @@ class WADEditor:
         file_menu.add_separator()
         file_menu.add_command(label="Import from WAD...", command=self.file_import)
         file_menu.add_command(label="Import Image(s)...", command=self.file_import_images)
+        file_menu.add_command(label="Add Wad To Blacklist", command=self.file_add_wad_to_blacklist)
         file_menu.add_command(label="Export...", command=self.file_export)
+        file_menu.add_command(label="Export Texture List", command=self.file_export_texture_list)
         file_menu.add_command(
             label="Export Image or Sequence as Sprite...",
             command=self.file_export_sprite,
@@ -1523,7 +1519,10 @@ class WADEditor:
         edit_menu.add_separator()
         edit_menu.add_command(label="Delete", command=self.edit_delete, accelerator="Delete")
         edit_menu.add_separator()
-        edit_menu.add_command(label="Remove ID Textures", command=self.edit_remove_id_textures)
+        edit_menu.add_command(
+            label="Remove Blacklisted Textures",
+            command=self.edit_remove_blacklisted_textures,
+        )
         edit_menu.add_separator()
         edit_menu.add_command(label="Rename Texture...", command=self.edit_rename)
         edit_menu.add_command(label="Resize Texture...", command=self.edit_resize)
@@ -2018,6 +2017,28 @@ class WADEditor:
             return self.notebook.nametowidget(current_tab)
         except Exception:
             return None
+
+    def _destroy_notebook_tab(self, tab_id: str):
+        """Forget and destroy a notebook tab widget to free Tk/Python resources."""
+        if not tab_id:
+            return
+
+        tab_widget = None
+        try:
+            tab_widget = self.notebook.nametowidget(tab_id)
+        except Exception:
+            tab_widget = None
+
+        try:
+            self.notebook.forget(tab_id)
+        except Exception:
+            pass
+
+        if tab_widget is not None:
+            try:
+                tab_widget.destroy()
+            except Exception:
+                pass
 
     def _update_view_menu_state(self):
         """Enable/disable image-only View actions based on active tab type."""
@@ -2748,6 +2769,86 @@ class WADEditor:
         Button(dialog, text="Export", command=do_export).pack(side=LEFT, padx=10, pady=10)
         Button(dialog, text="Cancel", command=dialog.destroy).pack(side=RIGHT, padx=10, pady=10)
 
+    def file_export_texture_list(self):
+        """Export the current WAD's texture names in their current order."""
+        current_tab = self.notebook.select()
+        if not current_tab:
+            return
+
+        tab_id = str(current_tab)
+        if tab_id not in self.wad_files:
+            messagebox.showinfo(
+                "Info",
+                "Export Texture List only works in WAD viewer tabs",
+            )
+            return
+
+        wad = self.wad_files[tab_id]
+        default_name = f"{Path(wad.get_name()).stem}_textures.txt"
+        filepath = filedialog.asksaveasfilename(
+            title="Export Texture List",
+            initialfile=default_name,
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialdir=self.get_dialog_initial_dir(),
+        )
+        if not filepath:
+            return
+
+        self.update_last_folder(filepath)
+        try:
+            with open(filepath, "w", encoding="utf-8", newline="\n") as list_file:
+                list_file.write("\n".join(texture.name for texture in wad.textures))
+                if wad.textures:
+                    list_file.write("\n")
+            self.set_status(f"Exported texture list: {filepath}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export texture list:\n{str(e)}")
+            self.set_status("Error exporting texture list")
+
+    def file_add_wad_to_blacklist(self):
+        """Write the current WAD's texture names to the blacklist directory."""
+        current_tab = self.notebook.select()
+        if not current_tab:
+            return
+
+        widget = self.notebook.nametowidget(current_tab)
+        if not isinstance(widget, WADViewerTab):
+            messagebox.showinfo(
+                "Info",
+                "Add Wad To Blacklist only works in WAD viewer tabs",
+            )
+            return
+
+        tab_id = str(current_tab)
+        if tab_id not in self.wad_files:
+            return
+
+        wad = self.wad_files[tab_id]
+        output_path = BLACKLIST_DIRECTORY / Path(wad.get_name()).with_suffix('.txt').name
+        BLACKLIST_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+        if output_path.exists() and not messagebox.askyesno(
+            "Overwrite Blacklist File",
+            f"{output_path.name} already exists. Overwrite it?",
+        ):
+            return
+
+        try:
+            texture_names = [texture.name for texture in wad.textures]
+            with output_path.open('w', encoding='utf-8', newline='\n') as list_file:
+                list_file.write('\n'.join(texture_names))
+                if texture_names:
+                    list_file.write('\n')
+            self.update_last_folder(str(output_path))
+            self.set_status(f"Added WAD textures to blacklist: {output_path}")
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Failed to add WAD to blacklist:\n{str(e)}",
+            )
+            self.set_status("Error adding WAD to blacklist")
+
     def file_export_sprite(self):
         """Export selected image or image sequence as a Quake .spr sprite file."""
         current_tab = self.notebook.select()
@@ -2989,8 +3090,8 @@ class WADEditor:
         if tab_id == self.palette_editor_tab_id:
             self.palette_editor_tab_id = None
         
-        # Remove tab
-        self.notebook.forget(current_tab)
+        # Remove and destroy tab widget to release memory.
+        self._destroy_notebook_tab(current_tab)
         self._update_view_menu_state()
         self.set_status("Tab closed")
 
@@ -3029,7 +3130,17 @@ class WADEditor:
         if isinstance(widget, WADViewerTab):
             textures = widget.get_selected_textures()
             if textures:
-                self.clipboard_textures = textures
+                # Copy texture payloads instead of storing live TextureData references.
+                self.clipboard_textures = [
+                    (
+                        texture.name,
+                        texture.width,
+                        texture.height,
+                        bytes(texture.data),
+                        list(texture.palette) if texture.palette else list(fcwadtool.QUAKE_PALETTE),
+                    )
+                    for texture in textures
+                ]
                 if len(textures) == 1:
                     self.set_status(f"Copied texture: {textures[0].name}")
                 else:
@@ -3055,13 +3166,13 @@ class WADEditor:
         
         # Create copies of all textures in clipboard
         pasted_count = 0
-        for clipboard_texture in self.clipboard_textures:
+        for name, width, height, data, palette in self.clipboard_textures:
             new_texture = TextureData(
-                clipboard_texture.name,
-                clipboard_texture.width,
-                clipboard_texture.height,
-                clipboard_texture.data,
-                clipboard_texture.palette
+                name,
+                width,
+                height,
+                data,
+                palette,
             )
             
             wad.add_texture(new_texture)
@@ -3075,7 +3186,7 @@ class WADEditor:
         self.update_tab_title(tab_id)
         
         if pasted_count == 1:
-            self.set_status(f"Pasted texture: {self.clipboard_textures[0].name}")
+            self.set_status(f"Pasted texture: {self.clipboard_textures[0][0]}")
         else:
             self.set_status(f"Pasted {pasted_count} textures")
     
@@ -3405,47 +3516,45 @@ class WADEditor:
 
         self.set_status("Sorted textures alphabetically")
 
-    def _scan_original_texture_names(self) -> Tuple[set, int, List[str]]:
-        """Scan the configured original-WAD directory for texture names."""
-        if not ORIGINAL_WAD_DIRECTORY.is_dir():
+    def _load_blacklisted_texture_names(self) -> set:
+        """Load case-insensitive texture names from all blacklist text files."""
+        if not BLACKLIST_DIRECTORY.is_dir():
             raise FileNotFoundError(
-                f'Original WAD directory does not exist: {ORIGINAL_WAD_DIRECTORY}'
-            )
-
-        wad_paths = sorted(
-            (
-                path
-                for path in ORIGINAL_WAD_DIRECTORY.rglob('*')
-                if path.is_file() and path.suffix.lower() == '.wad'
-            ),
-            key=lambda path: str(path).casefold(),
-        )
-        if not wad_paths:
-            raise FileNotFoundError(
-                f'No WAD files found in original WAD directory: {ORIGINAL_WAD_DIRECTORY}'
+                f'Blacklist directory does not exist: {BLACKLIST_DIRECTORY}'
             )
 
         texture_names = set()
-        failed_wads = []
-        for wad_path in wad_paths:
-            try:
+        blacklist_paths = sorted(
+            (
+                path
+                for path in BLACKLIST_DIRECTORY.iterdir()
+                if path.is_file() and path.suffix.lower() == '.txt'
+            ),
+            key=lambda path: path.name.casefold(),
+        )
+        for blacklist_path in blacklist_paths:
+            with blacklist_path.open('r', encoding='utf-8') as list_file:
                 texture_names.update(
-                    name.casefold() for name in read_wad_texture_names(wad_path)
+                    texture_name.casefold()
+                    for line in list_file
+                    for texture_name in [line.strip()]
+                    if texture_name and not texture_name.startswith('#')
                 )
-            except (OSError, ValueError) as error:
-                failed_wads.append(f'{wad_path.name}: {error}')
 
-        return texture_names, len(wad_paths) - len(failed_wads), failed_wads
+        return texture_names
 
-    def edit_remove_id_textures(self):
-        """Remove original Quake texture names from the active WAD tab."""
+    def edit_remove_blacklisted_textures(self):
+        """Remove blacklisted texture names from the active WAD tab."""
         current_tab = self.notebook.select()
         if not current_tab:
             return
 
         widget = self.notebook.nametowidget(current_tab)
         if not isinstance(widget, WADViewerTab):
-            messagebox.showinfo("Info", "Remove ID Textures only works in WAD viewer tabs")
+            messagebox.showinfo(
+                "Info",
+                "Remove Blacklisted Textures only works in WAD viewer tabs",
+            )
             return
 
         tab_id = str(current_tab)
@@ -3453,47 +3562,33 @@ class WADEditor:
             return
 
         try:
-            original_texture_names, scanned_wad_count, failed_wads = (
-                self._scan_original_texture_names()
-            )
-        except (FileNotFoundError, OSError) as error:
-            messagebox.showerror("Original WADs Not Found", str(error))
+            blacklisted_texture_names = self._load_blacklisted_texture_names()
+        except (FileNotFoundError, OSError, UnicodeError) as error:
+            messagebox.showerror("Blacklist Not Found", str(error))
             return
 
         wad = self.wad_files[tab_id]
-        if not original_texture_names and failed_wads:
-            messagebox.showerror(
-                "Original WAD Scan Failed",
-                (
-                    "Could not read any texture names from the original WADs.\n\n"
-                    + "\n".join(failed_wads)
-                ),
-            )
-            return
-
         removable_indices = [
             index
             for index, texture in enumerate(wad.textures)
-            if texture.name.casefold() in original_texture_names
+            if texture.name.casefold() in blacklisted_texture_names
             and not is_utility_texture_name(texture.name)
         ]
 
         if not removable_indices:
             self.set_status(
-                f"No ID textures found (scanned {scanned_wad_count} original WAD(s))"
+                f"No blacklisted textures found (loaded "
+                f"{len(blacklisted_texture_names)} names from {BLACKLIST_DIRECTORY.name}/)"
             )
             return
 
-        warning = ""
-        if failed_wads:
-            warning = f"\n\nCould not scan {len(failed_wads)} original WAD(s)."
-
         confirmed = messagebox.askyesno(
-            "Remove ID Textures",
+            "Remove Blacklisted Textures",
             (
-                f"Remove {len(removable_indices)} texture(s) matching the original "
-                f"Quake WADs?\n\nUtility textures (skip, clip, trigger, sky) "
-                f"will be preserved.{warning}"
+                f"Remove {len(removable_indices)} texture(s) matching the names in "
+                f"the text files in {BLACKLIST_DIRECTORY.name}/?\n\n"
+                f"Utility textures (skip, clip, "
+                f"trigger, sky) will be preserved."
             ),
         )
         if not confirmed:
@@ -3508,7 +3603,8 @@ class WADEditor:
         widget.refresh()
         self.update_tab_title(tab_id)
         self.set_status(
-            f"Removed {len(removable_indices)} ID texture(s); preserved utility textures"
+            f"Removed {len(removable_indices)} blacklisted texture(s); "
+            "preserved utility textures"
         )
     
     def edit_rename(self):

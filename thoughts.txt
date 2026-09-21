@@ -1,5 +1,7 @@
 Hi Copilot, you can safely ignore this file, it is just for me to organize my thoughts before passing them on to you.
 
+==========
+
 Ok, we want to create a set of graphic tools for Quake from id software.
 
 Our script named wadtools.py should be created in Python.
@@ -573,17 +575,37 @@ I would like to add a new feature under file: "Export image or sequence as sprit
 
 ==========
 
+Ok, let's make sure that the edit: Remove Id Textures is NOT scanning a fixed folder but is only using a text file list (idtexturelist.txt) for the names to match and then delete, scanning a folder with the wads everytime we call this function is wasteful when we could just cache all the texture names to remove in the idtexturelist.txt file and then just remove any textures in the current wad that match those.
 
+==========
 
+Ok, let's add a new item under file: "Export Texture List" that will write a text file containing the texture names in the current wad, one per line. 
 
+==========
 
+Let's change the menu item "Remove Id Textures" to "Remove Blacklisted Textures" and let's rename the file idtexturelist.txt to blacklist.txt.
 
+==========
 
+Let's extend the blacklist functionality: Let's add a folder that is automatically scanned ./blacklists/.
 
+Every textfile in that folder will represent a wad file that the user has specifically selected to add to the blacklist, except the blacklist file itself, which the user can use to add texture names manually.
 
+Let's create a new menu item under file: "Add Wad To Blacklist". This will simply scan all the texture names in the current wad file and produce a text file with the same name as the wad file in the blacklists folder (makkon_concrete.wad -> makkon_concrete.txt).
 
+The "Remove Blacklisted textures" utility should read the files in the ./blacklists/ folder to ensure we remove all the textures matching the names of any texture in those lists.
 
+Can you implement?
 
+==========
+
+I hit a bug, when I start it, the menu bar never loads and the app pegs a CPU core.
+
+==========
+
+I hit a pretty gnarly issue: When I load many wads and then unload / close them, the memory footprint of the application looks like it never frees up the memory used by closed files (a moment ago I had no open files and the TKInter process was using 7.2GB of memory). Only closing the application or killing the process and restarting seems to solve the problem.
+
+Can you investigate?
 
 
 

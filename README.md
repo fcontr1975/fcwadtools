@@ -61,9 +61,10 @@ A tabbed graphical application for viewing and editing WAD files, images, palett
 - **Import progress tab**: Non-blocking import status with per-file telemetry and progress bars
 - **Zoom and pan**: Use mouse wheel or Ctrl+/- to zoom, click and drag to pan
 - **Import/Export**: Import textures from other WAD files or export to different formats (WAD2/WAD3)
+- **Texture list export**: Export the current WAD's texture names, one per line, as a UTF-8 text file
 - **Sprite export**: Export one texture or selected `+Nname` frames as Quake `.spr` files
 - **Edit textures**: Copy, paste, resize, and reimport textures from image files
-- **Cleanup**: Remove names found in the original Quake WAD collection while preserving utility textures
+- **Cleanup**: Remove names listed in `blacklists/*.txt` while preserving utility textures
 - **Unsaved changes tracking**: Visual indicators for modified files
 - **Multiple file support**: Load and edit multiple WAD files at once
 
@@ -108,7 +109,9 @@ python3 fcwadeditor.py
 - **Preferences**: Configure default import palette and dithering options
 - **Import from WAD**: Load textures from another WAD file into the current one
 - **Import Image(s)**: Import one or more image files as textures into the current WAD
+- **Add Wad To Blacklist**: Write the current WAD's texture names to `blacklists/<wad-name>.txt`
 - **Export**: Export the current WAD file as WAD2 or WAD3
+- **Export Texture List**: Write the current WAD's texture names in their current order to a UTF-8 `.txt` file
 - **Export Image or Sequence as Sprite**: Export selected textures as Quake `.spr` files. Names such as `+1button`, `+2button`, and `+3button` are grouped and ordered as one sequence. Multiple unrelated selections can be exported as separate files. The dialog lets you choose the sprite orientation and a positive frame interval.
 - **Close Tab** (Ctrl+W): Close the current tab
 - **Exit**: Close the application (prompts to save unsaved changes)
@@ -117,7 +120,7 @@ python3 fcwadeditor.py
 - **Copy Texture** (Ctrl+C): Copy the currently selected texture to clipboard
 - **Paste Texture** (Ctrl+V): Paste clipboard texture into current WAD (auto-renames if duplicate)
 - **Delete**: Remove selected texture(s)
-- **Remove ID Textures**: Remove names found in the original Quake WAD collection while preserving `skip`, `clip`, `trigger`, and every `sky*` texture
+- **Remove Blacklisted Textures**: Remove names listed in every text file under `blacklists/` while preserving `skip`, `clip`, `trigger`, and every `sky*` texture
 - **Rename Texture**: Rename the selected texture (with WAD naming constraints)
 - **Resize Texture**: Resize the currently selected texture to new dimensions
 - **Reimport Texture**: Replace the selected texture with a new image from file
@@ -165,7 +168,7 @@ python3 fcwadeditor.py
 
 Thumbnail view also supports Ctrl-click for non-contiguous selections, Shift-click for a range, Delete or Backspace for deletion, and right-click for a context menu containing the common texture actions. Resize applies to every selected texture.
 
-`Edit -> Remove ID Textures` scans the fixed directory `/mnt/userdata/Games/Quake/wads/original/`. Every `.wad` below that directory is read from its directory entries, so image decoding is not needed for the scan. Name matching is case-insensitive. The operation asks for confirmation, marks the WAD modified, and should be used with a backup if the source archive must be preserved.
+`File -> Add Wad To Blacklist` writes one texture name per line to `blacklists/<wad-name>.txt`. The folder is created automatically, and an existing same-named list must be explicitly overwritten. `Edit -> Remove Blacklisted Textures` reads names from every `*.txt` file under `blacklists/`, including the manually maintained `blacklists/blacklist.txt`. Blank lines and lines beginning with `#` are ignored, and matching is case-insensitive. The operation asks for confirmation, preserves utility textures, marks the WAD modified, and should be used with a backup if the source archive must be preserved.
 
 #### Tab Management
 
@@ -386,7 +389,7 @@ The output should be checked in the target editor or engine, especially when mov
 - For best results with transparency, use PNG format with alpha channel
 - WAD readers validate dimensions up to 4096 x 4096 and skip malformed entries with warnings; BSP extraction reports incomplete or missing mip data but does not apply the same dimension limit.
 - Multiple-WAD merge compares names case-insensitively after truncating them to 15 characters. The first occurrence wins; exact duplicates and conflicting data are reported separately.
-- `File -> Remove ID Textures` depends on `/mnt/userdata/Games/Quake/wads/original/`. If that directory is not present, the command reports an error instead of deleting anything.
+- `Edit -> Remove Blacklisted Textures` scans every readable `*.txt` file under `blacklists/`. Use `blacklists/blacklist.txt` for manually entered names; if the directory is not present or a list cannot be read, the command reports an error instead of deleting anything.
 - The editor's `options.cfg` stores import preferences, the last file-dialog folder, the last ten edited paths, and the in-memory custom palette. It is local user state and is ignored by git.
 
 ### Palette editor
@@ -418,9 +421,9 @@ pip install Pillow
 - The extractor skips malformed, unsupported, or incomplete directory entries and prints a warning for each skipped entry
 - QPIC and miptex entries have different layouts; verify the source WAD type and entry types in a WAD inspection tool
 
-**The editor cannot remove ID textures**
-- Verify that `/mnt/userdata/Games/Quake/wads/original/` exists and contains the original `.wad` files
-- The cleanup scans WAD directory names and preserves `skip`, `clip`, `trigger`, and all `sky*` names
+**The editor cannot remove blacklisted textures**
+- Verify that `blacklists/` exists beside `fcwadeditor.py` and contains one or more `.txt` files with one texture name per line
+- The cleanup reads all those lists, including `blacklists/blacklist.txt`, and preserves `skip`, `clip`, `trigger`, and all `sky*` names
 
 **Texture quality issues**
 - Try different dithering modes (`--dithering 0` through `--dithering 4`)
