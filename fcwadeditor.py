@@ -10,11 +10,13 @@ import re
 import struct
 import io
 import json
+import gc
+import ctypes
 import threading
 import queue
 import time
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import Any, List, Tuple, Optional, Dict
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox, simpledialog, colorchooser
 from PIL import Image, ImageTk, ImageDraw, ImageFont
@@ -74,6 +76,92 @@ DEFAULT_EDITOR_OPTIONS = {
 PALETTE_LMP_BYTE_COUNT = 768
 PALETTE_GRID_COLUMNS = 16
 PALETTE_GRID_COLOR_COUNT = 256
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse boolean-like environment values."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float environment variable with fallback."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value.strip())
+    except Exception:
+        return default
+
+
+PERF_TELEMETRY_ENABLED = _env_flag('FCWAD_PERF_TELEMETRY', default=False)
+PERF_TELEMETRY_VERBOSE = _env_flag('FCWAD_PERF_VERBOSE', default=False)
+PERF_TELEMETRY_THRESHOLD_MS = max(0.0, _env_float('FCWAD_PERF_THRESHOLD_MS', 25.0))
+PERF_TELEMETRY_LOG_PATH = os.environ.get('FCWAD_PERF_LOG', '').strip()
+IMAGE_VIEW_MAX_TILED_RENDER_DIM = max(512, int(_env_float('FCWAD_IMAGE_MAX_TILED_DIM', 2048.0)))
+
+
+def _perf_format_value(value: Any) -> str:
+    """Render performance field values compactly and safely."""
+    if isinstance(value, float):
+        text = f"{value:.2f}"
+    else:
+        text = str(value)
+
+    if not text:
+        return '""'
+
+    if any(ch.isspace() for ch in text):
+        return '"' + text.replace('"', "'") + '"'
+
+    return text
+
+
+def perf_log(event: str, duration_ms: Optional[float] = None, force: bool = False, **fields: Any):
+    """Write optional performance telemetry to console (and optional log file)."""
+    if not PERF_TELEMETRY_ENABLED:
+        return
+
+    normalized_duration = None
+    if duration_ms is not None:
+        try:
+            normalized_duration = float(duration_ms)
+        except Exception:
+            normalized_duration = None
+
+    if normalized_duration is not None and not force and normalized_duration < PERF_TELEMETRY_THRESHOLD_MS:
+        return
+
+    if normalized_duration is None and not force and not PERF_TELEMETRY_VERBOSE:
+        return
+
+    timestamp = time.strftime('%H:%M:%S')
+    parts = [f"[fcwad-perf {timestamp}]", f"event={event}"]
+
+    if normalized_duration is not None:
+        parts.append(f"duration_ms={normalized_duration:.2f}")
+
+    for key, value in fields.items():
+        parts.append(f"{key}={_perf_format_value(value)}")
+
+    line = ' '.join(parts)
+    print(line, flush=True)
+
+    if PERF_TELEMETRY_LOG_PATH:
+        try:
+            with open(PERF_TELEMETRY_LOG_PATH, 'a', encoding='utf-8') as f:
+                f.write(line + '\n')
+        except Exception:
+            pass
 
 
 def is_utility_texture_name(name: str) -> bool:
@@ -305,6 +393,9 @@ class ImageViewerTab(Frame):
         self.pan_x = 0
         self.pan_y = 0
         self.drag_start = None
+        self._pending_zoom: Optional[float] = None
+        self._zoom_update_job: Optional[str] = None
+        self.max_tiled_render_dim = IMAGE_VIEW_MAX_TILED_RENDER_DIM
         
         # Create canvas with scrollbars
         self.canvas = Canvas(self, bg='#2b2b2b', highlightthickness=0)
@@ -339,38 +430,67 @@ class ImageViewerTab(Frame):
         
         self.photo_image = None
         self.image_ids: List[int] = []
-        self.update_image()
+        self.update_image(reason='init')
     
-    def update_image(self):
+    def update_image(self, reason: str = 'manual'):
         """Update the displayed image"""
+        perf_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+
         # Get one zoomed tile image and render based on current view mode.
+        image_prepare_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
         self.photo_image = self.texture.get_display_image(self.zoom)
+        image_prepare_ms = 0.0
+        if PERF_TELEMETRY_ENABLED:
+            image_prepare_ms = (time.perf_counter() - image_prepare_start) * 1000.0
+
         tile_width = self.photo_image.width()
         tile_height = self.photo_image.height()
-        
-        # Update canvas
-        for image_id in self.image_ids:
-            self.canvas.delete(image_id)
-        self.image_ids = []
+        render_tile_columns, render_tile_rows, adaptive_tiling = self._get_render_tile_grid(tile_width, tile_height)
 
-        for row in range(self.tile_rows):
-            for col in range(self.tile_columns):
+        # Update canvas (reuse existing items when possible).
+        canvas_update_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+        required_tiles = render_tile_rows * render_tile_columns
+        rebuilt_canvas_items = False
+
+        if len(self.image_ids) != required_tiles:
+            rebuilt_canvas_items = True
+            for image_id in self.image_ids:
+                self.canvas.delete(image_id)
+            self.image_ids = []
+
+            for _ in range(required_tiles):
                 image_id = self.canvas.create_image(
-                    col * tile_width,
-                    row * tile_height,
+                    0,
+                    0,
                     anchor='nw',
                     image=self.photo_image,
                 )
                 self.image_ids.append(image_id)
+
+        for i, image_id in enumerate(self.image_ids):
+            row = i // render_tile_columns
+            col = i % render_tile_columns
+            self.canvas.coords(image_id, col * tile_width, row * tile_height)
+            self.canvas.itemconfig(image_id, image=self.photo_image)
+
+        canvas_update_ms = 0.0
+        if PERF_TELEMETRY_ENABLED:
+            canvas_update_ms = (time.perf_counter() - canvas_update_start) * 1000.0
         
         # Update scroll region
-        img_width = tile_width * self.tile_columns
-        img_height = tile_height * self.tile_rows
+        img_width = tile_width * render_tile_columns
+        img_height = tile_height * render_tile_rows
         self.canvas.configure(scrollregion=(0, 0, img_width, img_height))
         
         # Update info label
         if self.is_tiled_view:
-            view_mode_text = f"Tiled {self.tile_columns}x{self.tile_rows}"
+            if adaptive_tiling:
+                view_mode_text = (
+                    f"Tiled {render_tile_columns}x{render_tile_rows} "
+                    f"(adaptive from {self.tile_columns}x{self.tile_rows})"
+                )
+            else:
+                view_mode_text = f"Tiled {self.tile_columns}x{self.tile_rows}"
         else:
             view_mode_text = "Original"
 
@@ -380,6 +500,121 @@ class ImageViewerTab(Frame):
                 f"- {view_mode_text} - Zoom: {int(self.zoom*100)}%"
             )
         )
+
+        if PERF_TELEMETRY_ENABLED:
+            perf_log(
+                'image_view.update',
+                duration_ms=(time.perf_counter() - perf_start) * 1000.0,
+                reason=reason,
+                texture=self.texture.name if self.texture else '<none>',
+                zoom=self.zoom,
+                tile_columns=self.tile_columns,
+                tile_rows=self.tile_rows,
+                render_tile_columns=render_tile_columns,
+                render_tile_rows=render_tile_rows,
+                tiles=required_tiles,
+                adaptive_tiling=adaptive_tiling,
+                rebuilt_items=rebuilt_canvas_items,
+                image_prepare_ms=image_prepare_ms,
+                canvas_update_ms=canvas_update_ms,
+            )
+
+    def _get_render_tile_grid(self, tile_width: int, tile_height: int) -> Tuple[int, int, bool]:
+        """Determine tile grid used for rendering, adapting at high zoom levels."""
+        if not self.is_tiled_view:
+            return 1, 1, False
+
+        render_tile_columns = max(1, self.tile_columns)
+        render_tile_rows = max(1, self.tile_rows)
+        max_dim = max(1, int(self.max_tiled_render_dim))
+
+        if tile_width > 0:
+            max_columns = max(1, max_dim // tile_width)
+            render_tile_columns = min(render_tile_columns, max_columns)
+
+        if tile_height > 0:
+            max_rows = max(1, max_dim // tile_height)
+            render_tile_rows = min(render_tile_rows, max_rows)
+
+        adaptive_tiling = (
+            render_tile_columns != self.tile_columns
+            or render_tile_rows != self.tile_rows
+        )
+        return render_tile_columns, render_tile_rows, adaptive_tiling
+
+    def _get_wheel_zoom_delay_ms(self, target_zoom: float) -> int:
+        """Return dynamic debounce delay for wheel-driven zoom updates."""
+        if not self.is_tiled_view:
+            return 35
+
+        if target_zoom >= 10.0:
+            return 140
+        if target_zoom >= 6.0:
+            return 110
+        if target_zoom >= 3.0:
+            return 80
+        return 45
+
+    def _get_wheel_zoom_factor(self, base_zoom: float) -> float:
+        """Return wheel zoom multiplier; finer at high magnification."""
+        if base_zoom >= 10.0:
+            return 1.10
+        if base_zoom >= 6.0:
+            return 1.15
+        if base_zoom >= 3.0:
+            return 1.20
+        return 1.30
+
+    def _set_zoom(self, new_zoom: float, reason: str, defer: bool = False):
+        """Apply or queue a zoom level update."""
+        clamped_zoom = max(self.min_zoom, min(self.max_zoom, float(new_zoom)))
+        current_target = self._pending_zoom if self._pending_zoom is not None else self.zoom
+        if abs(clamped_zoom - current_target) < 1e-9:
+            return
+
+        if defer:
+            self._pending_zoom = clamped_zoom
+            if self._zoom_update_job is not None:
+                try:
+                    self.after_cancel(self._zoom_update_job)
+                except Exception:
+                    pass
+
+            defer_delay_ms = self._get_wheel_zoom_delay_ms(clamped_zoom)
+            self._zoom_update_job = self.after(
+                defer_delay_ms,
+                lambda r=reason: self._apply_pending_zoom(r),
+            )
+            return
+
+        if self._zoom_update_job is not None:
+            try:
+                self.after_cancel(self._zoom_update_job)
+            except Exception:
+                pass
+            self._zoom_update_job = None
+        self._pending_zoom = None
+
+        if abs(clamped_zoom - self.zoom) < 1e-9:
+            return
+
+        self.zoom = clamped_zoom
+        self.update_image(reason=reason)
+
+    def _apply_pending_zoom(self, reason: str):
+        """Commit a queued zoom update from rapid wheel events."""
+        self._zoom_update_job = None
+
+        if self._pending_zoom is None:
+            return
+
+        new_zoom = self._pending_zoom
+        self._pending_zoom = None
+        if abs(new_zoom - self.zoom) < 1e-9:
+            return
+
+        self.zoom = new_zoom
+        self.update_image(reason=reason)
 
     def set_tiled_view(self, enabled: bool):
         """Toggle between tiled (3x3) and original (1x1) image view."""
@@ -392,21 +627,15 @@ class ImageViewerTab(Frame):
             self.tile_rows = 1
             self.is_tiled_view = False
 
-        self.update_image()
+        self.update_image(reason='view_mode')
     
     def zoom_in(self, event=None):
         """Zoom in"""
-        old_zoom = self.zoom
-        self.zoom = min(self.zoom * 1.5, self.max_zoom)
-        if old_zoom != self.zoom:
-            self.update_image()
+        self._set_zoom(self.zoom * 1.5, reason='zoom_in', defer=False)
     
     def zoom_out(self, event=None):
         """Zoom out"""
-        old_zoom = self.zoom
-        self.zoom = max(self.zoom / 1.5, self.min_zoom)
-        if old_zoom != self.zoom:
-            self.update_image()
+        self._set_zoom(self.zoom / 1.5, reason='zoom_out', defer=False)
 
     def set_zoom_percent(self, zoom_percent: int):
         """Set zoom directly from a percent value."""
@@ -416,18 +645,17 @@ class ImageViewerTab(Frame):
             return
 
         normalized_zoom = max(self.min_zoom, min(self.max_zoom, normalized_zoom))
-        if abs(normalized_zoom - self.zoom) < 1e-9:
-            return
-
-        self.zoom = normalized_zoom
-        self.update_image()
+        self._set_zoom(normalized_zoom, reason='set_zoom_level', defer=False)
     
     def on_mousewheel(self, event):
         """Handle mouse wheel for zooming"""
+        base_zoom = self._pending_zoom if self._pending_zoom is not None else self.zoom
+        wheel_factor = self._get_wheel_zoom_factor(base_zoom)
         if event.num == 4 or event.delta > 0:
-            self.zoom_in()
+            self._set_zoom(base_zoom * wheel_factor, reason='wheel_zoom', defer=True)
         elif event.num == 5 or event.delta < 0:
-            self.zoom_out()
+            self._set_zoom(base_zoom / wheel_factor, reason='wheel_zoom', defer=True)
+        return 'break'
     
     def on_drag_start(self, event):
         """Start panning"""
@@ -451,6 +679,14 @@ class ImageViewerTab(Frame):
 
     def destroy(self):
         """Release image references before destroying this tab."""
+        if self._zoom_update_job is not None:
+            try:
+                self.after_cancel(self._zoom_update_job)
+            except Exception:
+                pass
+            self._zoom_update_job = None
+
+        self._pending_zoom = None
         self.photo_image = None
         self.image_ids = []
         self.texture = None
@@ -467,6 +703,7 @@ class WADViewerTab(Frame):
         self.selected_indices = set()  # Changed to set for multi-select
         self.last_selected_index = None  # For shift-click range selection
         self.icon_size = 128  # Default icon size
+        self.current_columns: Optional[int] = None
         
         # Create scrollable frame
         self.canvas = Canvas(self, bg='#2b2b2b', highlightthickness=0)
@@ -506,7 +743,7 @@ class WADViewerTab(Frame):
         self.drag_start_pos = None
         self.drag_in_progress = False
         self.drag_threshold = 8
-        self.refresh()
+        self.refresh(reason='init')
 
     def _bind_mousewheel(self, widget):
         """Bind mousewheel handlers to a widget local to this tab."""
@@ -521,38 +758,78 @@ class WADViewerTab(Frame):
         elif event.num == 5 or event.delta < 0:
             self.canvas.yview_scroll(1, 'units')
         return 'break'
+
+    def _is_active_tab(self) -> bool:
+        """Return whether this viewer is the currently selected notebook tab."""
+        if not self.editor:
+            return True
+
+        try:
+            return str(self.editor.notebook.select()) == str(self)
+        except Exception:
+            return True
+
+    def _calculate_columns(self, canvas_width: int) -> int:
+        """Compute thumbnail columns for a given canvas width."""
+        usable_width = max(1, int(canvas_width) - 25)
+        item_width = self.icon_size + 24
+        return max(1, usable_width // item_width)
     
     def _on_resize(self, event):
         """Handle window resize to recalculate columns"""
-        # Only refresh if width changed significantly
-        if abs(event.width - self.last_width) > 50:
-            self.last_width = event.width
-            self.refresh()
+        # Ignore hidden/tiny-width resize events and non-active tabs.
+        if event.width < 100 or not self.winfo_ismapped() or not self._is_active_tab():
+            return
+
+        old_width = self.last_width
+        self.last_width = event.width
+
+        new_columns = self._calculate_columns(event.width)
+        if self.current_columns is not None and new_columns == self.current_columns:
+            perf_log(
+                'wad_view.resize_skip',
+                force=PERF_TELEMETRY_VERBOSE,
+                wad=self.wad.get_name() if self.wad else '<none>',
+                width=event.width,
+                columns=new_columns,
+                textures=len(self.wad.textures) if self.wad else 0,
+            )
+            return
+
+        self.refresh(reason='resize')
+        perf_log(
+            'wad_view.resize_refresh',
+            force=PERF_TELEMETRY_VERBOSE,
+            wad=self.wad.get_name() if self.wad else '<none>',
+            width=event.width,
+            old_width=old_width,
+            delta=abs(event.width - old_width),
+            columns=new_columns,
+            textures=len(self.wad.textures) if self.wad else 0,
+        )
     
     def zoom_icons_in(self):
         """Increase icon size by 25%"""
         self.icon_size = int(self.icon_size * 1.25)
         self.icon_size = min(self.icon_size, 512)  # Cap at 512
-        self.refresh()
+        self.refresh(reason='zoom_in')
     
     def zoom_icons_out(self):
         """Decrease icon size by 25%"""
         self.icon_size = int(self.icon_size / 1.25)
         self.icon_size = max(self.icon_size, 32)  # Minimum 32
-        self.refresh()
+        self.refresh(reason='zoom_out')
     
     def set_icon_size(self, size: int):
         """Set icon size to specific value"""
         self.icon_size = max(32, min(512, size))
-        self.refresh()
+        self.refresh(reason='set_icon_size')
     
-    def refresh(self):
+    def refresh(self, reason: str = 'manual'):
         """Refresh the texture display"""
-        # Clear existing frames
-        for frame in self.texture_frames:
-            frame.destroy()
-        self.texture_frames = []
-        self.widget_to_index = {}
+        refresh_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+        clear_ms = 0.0
+        measure_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
         
         # Calculate number of columns based on window width
         # Force update to get accurate width
@@ -566,15 +843,70 @@ class WADViewerTab(Frame):
             if canvas_width < 100:
                 canvas_width = 800  # Fallback default
         
-        # Subtract scrollbar width (approximately 20px)
-        usable_width = canvas_width - 25
-        
-        # Each icon needs: icon_size + padding (10) + frame border (4) + margins (10)
-        item_width = self.icon_size + 24
-        columns = max(1, usable_width // item_width)
+        columns = self._calculate_columns(canvas_width)
+        self.last_width = canvas_width
+
+        layout_ms = 0.0
+        if PERF_TELEMETRY_ENABLED:
+            layout_ms = (time.perf_counter() - measure_start) * 1000.0
+
+        # Fast path: for resize-only changes, keep widgets/images and just re-grid.
+        if (
+            reason == 'resize'
+            and self.texture_frames
+            and len(self.texture_frames) == len(self.wad.textures)
+        ):
+            if columns == self.current_columns:
+                perf_log(
+                    'wad_view.relayout_skip',
+                    force=PERF_TELEMETRY_VERBOSE,
+                    wad=self.wad.get_name() if self.wad else '<none>',
+                    columns=columns,
+                    textures=len(self.wad.textures) if self.wad else 0,
+                )
+                return
+
+            relayout_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+            for i, frame in enumerate(self.texture_frames):
+                frame.grid_configure(row=i // columns, column=i % columns)
+
+            self.current_columns = columns
+
+            if PERF_TELEMETRY_ENABLED:
+                relayout_ms = (time.perf_counter() - relayout_start) * 1000.0
+                total_ms = (time.perf_counter() - refresh_start) * 1000.0
+                perf_log(
+                    'wad_view.relayout',
+                    duration_ms=total_ms,
+                    reason=reason,
+                    wad=self.wad.get_name() if self.wad else '<none>',
+                    textures=len(self.wad.textures) if self.wad else 0,
+                    icon_size=self.icon_size,
+                    columns=columns,
+                    relayout_ms=relayout_ms,
+                    layout_ms=layout_ms,
+                )
+            return
+
+        measure_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+
+        # Full rebuild path.
+        previous_frame_count = len(self.texture_frames)
+        for frame in self.texture_frames:
+            frame.destroy()
+        self.texture_frames = []
+        self.widget_to_index = {}
+
+        if PERF_TELEMETRY_ENABLED:
+            clear_ms = (time.perf_counter() - measure_start) * 1000.0
+
+        thumb_ms = 0.0
+        tile_build_ms = 0.0
+        thumbnail_errors = 0
         
         # Create grid of textures
         for i, texture in enumerate(self.wad.textures):
+            tile_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
             row = i // columns
             col = i % columns
             
@@ -583,11 +915,15 @@ class WADViewerTab(Frame):
             
             # Texture thumbnail
             try:
+                thumb_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
                 photo = texture.get_thumbnail(self.icon_size)
+                if PERF_TELEMETRY_ENABLED:
+                    thumb_ms += (time.perf_counter() - thumb_start) * 1000.0
                 label = Label(frame, image=photo, bg='#3b3b3b')
                 label.image = photo  # Keep a reference
                 label.pack(pady=5)
             except Exception as e:
+                thumbnail_errors += 1
                 label = Label(frame, text="Error", bg='#3b3b3b', fg='red')
                 label.pack(pady=5)
             
@@ -646,6 +982,29 @@ class WADViewerTab(Frame):
                 frame.configure(relief=SUNKEN, borderwidth=4)
             
             self.texture_frames.append(frame)
+
+            if PERF_TELEMETRY_ENABLED:
+                tile_build_ms += (time.perf_counter() - tile_start) * 1000.0
+
+        self.current_columns = columns
+
+        if PERF_TELEMETRY_ENABLED:
+            total_ms = (time.perf_counter() - refresh_start) * 1000.0
+            perf_log(
+                'wad_view.refresh',
+                duration_ms=total_ms,
+                reason=reason,
+                wad=self.wad.get_name() if self.wad else '<none>',
+                textures=len(self.wad.textures) if self.wad else 0,
+                icon_size=self.icon_size,
+                columns=columns,
+                prior_tiles=previous_frame_count,
+                clear_ms=clear_ms,
+                layout_ms=layout_ms,
+                thumb_ms=thumb_ms,
+                tile_build_ms=tile_build_ms,
+                thumb_errors=thumbnail_errors,
+            )
 
     def destroy(self):
         """Release tab references that can pin large WAD/image objects."""
@@ -752,7 +1111,7 @@ class WADViewerTab(Frame):
         self.selected_indices = {target_index}
         self.last_selected_index = target_index
 
-        self.refresh()
+        self.refresh(reason='reorder')
 
         if self.editor:
             tab_id = str(self)
@@ -879,7 +1238,7 @@ class WADViewerTab(Frame):
         self.last_selected_index = None
         
         # Refresh the display
-        self.refresh()
+        self.refresh(reason='delete_selected')
         
         # Update tab title to show modified state
         if self.editor:
@@ -1447,6 +1806,26 @@ class WADEditor:
         self.display_palette_file: str = ''
         self.options_path = Path(__file__).resolve().parent / OPTIONS_FILENAME
         self.options = self.load_options()
+        self._malloc_trim = None
+        if sys.platform.startswith('linux'):
+            try:
+                libc = ctypes.CDLL('libc.so.6')
+                malloc_trim = getattr(libc, 'malloc_trim', None)
+                if malloc_trim is not None:
+                    malloc_trim.argtypes = [ctypes.c_size_t]
+                    malloc_trim.restype = ctypes.c_int
+                    self._malloc_trim = malloc_trim
+            except Exception:
+                self._malloc_trim = None
+
+        perf_log(
+            'telemetry.enabled',
+            force=True,
+            threshold_ms=PERF_TELEMETRY_THRESHOLD_MS,
+            verbose=PERF_TELEMETRY_VERBOSE,
+            log_path=PERF_TELEMETRY_LOG_PATH or '<stdout>',
+            pid=os.getpid(),
+        )
         self.custom_palette = self._normalize_palette_values(
             self.options.get('custom_palette_data', DEFAULT_EDITOR_OPTIONS['custom_palette_data'])
         )
@@ -2040,8 +2419,20 @@ class WADEditor:
             except Exception:
                 pass
 
+    def _release_memory_to_os(self):
+        """Prompt GC and allocator to return free memory pages after heavy tab churn."""
+        gc.collect()
+
+        if self._malloc_trim is not None:
+            try:
+                self._malloc_trim(0)
+            except Exception:
+                pass
+
     def _update_view_menu_state(self):
         """Enable/disable image-only View actions based on active tab type."""
+        perf_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
+
         if not hasattr(self, 'view_menu'):
             return
 
@@ -2068,6 +2459,14 @@ class WADEditor:
             self.view_menu.entryconfig(self.view_tiled_image_label, state=tiled_state)
         except Exception:
             pass
+
+        if PERF_TELEMETRY_ENABLED:
+            perf_log(
+                'ui.update_view_menu_state',
+                duration_ms=(time.perf_counter() - perf_start) * 1000.0,
+                force=PERF_TELEMETRY_VERBOSE,
+                image_menu_state=image_menu_state,
+            )
 
     def _refresh_all_texture_views(self):
         """Regenerate texture previews and refresh all open WAD/image tabs."""
@@ -2120,8 +2519,17 @@ class WADEditor:
     
     def set_status(self, message: str):
         """Update status bar message"""
+        perf_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
         self.status_bar.config(text=self._status_with_display_palette(message))
-        self.root.update_idletasks()
+
+        if PERF_TELEMETRY_ENABLED:
+            perf_log(
+                'ui.status_update',
+                duration_ms=(time.perf_counter() - perf_start) * 1000.0,
+                status=message,
+                tabs=len(self.notebook.tabs()),
+                open_wads=len(self.wad_files),
+            )
     
     def update_tab_title(self, tab_id: str):
         """Update tab title with modified indicator"""
@@ -3092,6 +3500,11 @@ class WADEditor:
         
         # Remove and destroy tab widget to release memory.
         self._destroy_notebook_tab(current_tab)
+
+        # If no WADs remain open, aggressively reclaim free heap pages.
+        if not self.wad_files:
+            self.root.after_idle(self._release_memory_to_os)
+
         self._update_view_menu_state()
         self.set_status("Tab closed")
 
@@ -3724,15 +4137,42 @@ class WADEditor:
     
     def on_tab_changed(self, event):
         """Handle tab change event"""
+        perf_start = time.perf_counter() if PERF_TELEMETRY_ENABLED else 0.0
         self._update_view_menu_state()
+
+        tab_kind = 'none'
+        tab_name = ''
+        texture_count = 0
+
         current_tab = self.notebook.select()
         if current_tab:
             tab_id = str(current_tab)
             if tab_id in self.wad_files:
                 wad = self.wad_files[tab_id]
+                tab_kind = 'wad'
+                tab_name = wad.get_name()
+                texture_count = len(wad.textures)
                 self.set_status(f"Viewing {wad.get_name()} ({len(wad.textures)} textures)")
             elif tab_id == self.palette_editor_tab_id:
+                tab_kind = 'palette'
+                tab_name = 'Quake Palette'
                 self.set_status('Editing Quake palette')
+            else:
+                tab_kind = 'image_or_other'
+                try:
+                    tab_name = self.notebook.tab(current_tab, 'text')
+                except Exception:
+                    tab_name = ''
+
+        if PERF_TELEMETRY_ENABLED:
+            perf_log(
+                'ui.tab_changed',
+                duration_ms=(time.perf_counter() - perf_start) * 1000.0,
+                tab_kind=tab_kind,
+                tab_name=tab_name,
+                textures=texture_count,
+                notebook_tabs=len(self.notebook.tabs()),
+            )
     
     def on_tab_right_click(self, event):
         """Handle right-click on tab for context menu"""

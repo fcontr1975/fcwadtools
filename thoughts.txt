@@ -607,6 +607,140 @@ I hit a pretty gnarly issue: When I load many wads and then unload / close them,
 
 Can you investigate?
 
+==========
+
+Ok, I loaded a bunch of wads and closed them all and I still had 861MB used.
+On load, the app uses 51.4MB so we still have something large retained in memory after closing all the files.
+
+Can you investigate?
+
+==========
+
+Ok, when I close the last wad, it definitely drops substantially. 
+
+Another problem I see now is that when we have a few wads open (more than 2 or 3), if we switch between wads, there is a single threaded process that pegs the CPU for a substantial amount of time (more than 5-10 seconds) before the interface becomes useable / responsive again. Can we add some telemetry so I can give you more accurate feedback of what could be pegging the CPU so that you can target the source of the problem accurately?
+
+==========
+
+Ok, I ran the telemetry, here are the results:
+
+[fcwad-perf 21:11:43] event=telemetry.enabled threshold_ms=5.00 verbose=False log_path=/tmp/fcwad-perf.log pid=42988
+[fcwad-perf 21:11:53] event=wad_view.refresh duration_ms=411.25 reason=init wad=makkon_building.wad textures=504 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=0.28 thumb_ms=127.77 tile_build_ms=410.46 thumb_errors=0
+[fcwad-perf 21:11:54] event=wad_view.refresh duration_ms=594.08 reason=resize wad=makkon_building.wad textures=504 icon_size=128 columns=6 prior_tiles=504 clear_ms=238.03 layout_ms=3.36 thumb_ms=85.76 tile_build_ms=352.18 thumb_errors=0
+[fcwad-perf 21:11:54] event=ui.status_update duration_ms=293.77 status="Loaded /mnt/userdata/Games/Quake/wads/makkon/makkon_building.wad with 504 texture(s)" tabs=1 open_wads=1
+[fcwad-perf 21:11:57] event=wad_view.refresh duration_ms=1236.37 reason=init wad=makkon_concrete.wad textures=1476 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=0.31 thumb_ms=367.72 tile_build_ms=1234.62 thumb_errors=0
+[fcwad-perf 21:12:01] event=wad_view.refresh duration_ms=4280.50 reason=resize wad=makkon_concrete.wad textures=1476 icon_size=128 columns=6 prior_tiles=1476 clear_ms=3089.59 layout_ms=5.24 thumb_ms=256.26 tile_build_ms=1184.19 thumb_errors=0
+[fcwad-perf 21:12:03] event=ui.status_update duration_ms=2052.49 status="Loaded /mnt/userdata/Games/Quake/wads/makkon/makkon_concrete.wad with 1476 texture(s)" tabs=2 open_wads=2
+[fcwad-perf 21:12:04] event=wad_view.refresh duration_ms=45.29 reason=init wad=makkon_CTF.wad textures=32 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=0.50 thumb_ms=13.92 tile_build_ms=44.74 thumb_errors=0
+[fcwad-perf 21:12:04] event=wad_view.refresh duration_ms=155.65 reason=resize wad=makkon_CTF.wad textures=32 icon_size=128 columns=6 prior_tiles=32 clear_ms=125.77 layout_ms=4.25 thumb_ms=5.74 tile_build_ms=25.59 thumb_errors=0
+[fcwad-perf 21:12:04] event=ui.status_update duration_ms=44.35 status="Loaded /mnt/userdata/Games/Quake/wads/makkon/makkon_CTF.wad with 32 texture(s)" tabs=3 open_wads=3
+[fcwad-perf 21:12:10] event=wad_view.refresh duration_ms=1356.49 reason=init wad=makkon_gothic_stone.wad textures=1464 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=0.69 thumb_ms=380.79 tile_build_ms=1354.31 thumb_errors=0
+[fcwad-perf 21:12:22] event=wad_view.refresh duration_ms=12640.57 reason=resize wad=makkon_gothic_stone.wad textures=1464 icon_size=128 columns=6 prior_tiles=1464 clear_ms=11348.39 layout_ms=7.43 thumb_ms=283.87 tile_build_ms=1283.02 thumb_errors=0
+[fcwad-perf 21:12:24] event=ui.status_update duration_ms=2222.73 status="Loaded /mnt/userdata/Games/Quake/wads/makkon/makkon_gothic_stone.wad with 1464 texture(s)" tabs=4 open_wads=4
+[fcwad-perf 21:12:46] event=wad_view.refresh duration_ms=13673.24 reason=resize wad=makkon_gothic_stone.wad textures=1464 icon_size=128 columns=12 prior_tiles=1464 clear_ms=12378.45 layout_ms=11.61 thumb_ms=279.24 tile_build_ms=1281.51 thumb_errors=0
+[fcwad-perf 21:13:17] event=wad_view.refresh duration_ms=439.10 reason=resize wad=makkon_CTF.wad textures=32 icon_size=128 columns=12 prior_tiles=32 clear_ms=409.53 layout_ms=6.07 thumb_ms=5.60 tile_build_ms=23.45 thumb_errors=0
+[fcwad-perf 21:13:17] event=ui.status_update duration_ms=66.82 status="Viewing makkon_CTF.wad (32 textures)" tabs=4 open_wads=4
+[fcwad-perf 21:13:17] event=ui.tab_changed duration_ms=67.19 tab_kind=wad tab_name=makkon_CTF.wad textures=32 notebook_tabs=4
+[fcwad-perf 21:13:33] event=wad_view.refresh duration_ms=14779.48 reason=resize wad=makkon_concrete.wad textures=1476 icon_size=128 columns=12 prior_tiles=1476 clear_ms=13504.04 layout_ms=6.04 thumb_ms=274.59 tile_build_ms=1267.81 thumb_errors=0
+[fcwad-perf 21:13:35] event=ui.status_update duration_ms=2274.88 status="Viewing makkon_concrete.wad (1476 textures)" tabs=4 open_wads=4
+[fcwad-perf 21:13:35] event=ui.tab_changed duration_ms=2275.18 tab_kind=wad tab_name=makkon_concrete.wad textures=1476 notebook_tabs=4
+[fcwad-perf 21:13:45] event=wad_view.refresh duration_ms=6599.86 reason=resize wad=makkon_building.wad textures=504 icon_size=128 columns=12 prior_tiles=504 clear_ms=6211.47 layout_ms=2.63 thumb_ms=93.56 tile_build_ms=385.21 thumb_errors=0
+[fcwad-perf 21:13:45] event=ui.status_update duration_ms=866.51 status="Viewing makkon_building.wad (504 textures)" tabs=4 open_wads=4
+[fcwad-perf 21:13:45] event=ui.tab_changed duration_ms=866.95 tab_kind=wad tab_name=makkon_building.wad textures=504 notebook_tabs=4
+
+I have a feeling we are not caching the thumnails at all and we are repeating the resize operation everytime we switch tabs. Maybe we cache completed resizes in a ./thumbnails/ folder and use it until the thumbnails do not meet our criteria (image changed, thumnail size incorrect)?
+
+
+==========
+
+Ok, performance is MUCH better! It's still a little slow switching sometimes, but these are very large wads nothing we routinely use will be bigger than these.
+
+Here is the output:
+
+[fcwad-perf 21:20:12] event=telemetry.enabled threshold_ms=5.00 verbose=False log_path=/tmp/fcwad-perf.log pid=43473
+[fcwad-perf 21:20:25] event=wad_view.refresh duration_ms=420.81 reason=init wad=makkon_building.wad textures=504 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=0.64 thumb_ms=128.92 tile_build_ms=419.67 thumb_errors=0
+[fcwad-perf 21:20:27] event=wad_view.relayout duration_ms=83.31 reason=resize wad=makkon_building.wad textures=504 icon_size=128 columns=12 relayout_ms=25.62 layout_ms=57.67
+[fcwad-perf 21:20:28] event=wad_view.refresh duration_ms=1763.84 reason=init wad=makkon_concrete.wad textures=1476 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=396.15 thumb_ms=393.19 tile_build_ms=1366.21 thumb_errors=0
+[fcwad-perf 21:20:30] event=wad_view.relayout duration_ms=194.48 reason=resize wad=makkon_concrete.wad textures=1476 icon_size=128 columns=12 relayout_ms=90.05 layout_ms=104.41
+[fcwad-perf 21:20:30] event=wad_view.refresh duration_ms=2141.53 reason=init wad=makkon_CTF.wad textures=32 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=2089.37 thumb_ms=16.59 tile_build_ms=52.09 thumb_errors=0
+[fcwad-perf 21:20:34] event=wad_view.refresh duration_ms=1415.06 reason=init wad=makkon_gothic_stone.wad textures=1464 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=42.81 thumb_ms=378.37 tile_build_ms=1370.80 thumb_errors=0
+[fcwad-perf 21:20:38] event=wad_view.relayout duration_ms=232.64 reason=resize wad=makkon_gothic_stone.wad textures=1464 icon_size=128 columns=12 relayout_ms=102.30 layout_ms=130.34
+[fcwad-perf 21:20:38] event=wad_view.refresh duration_ms=3139.68 reason=init wad=makkon_horror.wad textures=470 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=2679.17 thumb_ms=134.51 tile_build_ms=459.99 thumb_errors=0
+[fcwad-perf 21:20:43] event=wad_view.relayout duration_ms=128.95 reason=resize wad=makkon_horror.wad textures=470 icon_size=128 columns=12 relayout_ms=14.93 layout_ms=114.01
+[fcwad-perf 21:20:44] event=wad_view.refresh duration_ms=1973.83 reason=init wad=makkon_industrial.wad textures=925 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=1080.41 thumb_ms=252.35 tile_build_ms=892.42 thumb_errors=0
+[fcwad-perf 21:20:47] event=wad_view.relayout duration_ms=191.61 reason=resize wad=makkon_industrial.wad textures=925 icon_size=128 columns=12 relayout_ms=52.95 layout_ms=138.66
+[fcwad-perf 21:20:48] event=wad_view.refresh duration_ms=2459.18 reason=init wad=makkon_marble.wad textures=326 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.00 layout_ms=2062.92 thumb_ms=84.21 tile_build_ms=395.92 thumb_errors=0
+[fcwad-perf 21:21:06] event=wad_view.relayout duration_ms=62.84 reason=resize wad=makkon_marble.wad textures=326 icon_size=128 columns=12 relayout_ms=6.92 layout_ms=55.92
+
+One little thing that still acts very slow is using the mousewheel to zoom in and out, can we see if we can get that optimized so that the performance is a little better?
+
+Ok, I ran your test, here is the telemetry:
+
+[fcwad-perf 21:33:18] event=telemetry.enabled threshold_ms=0.00 verbose=False log_path=/tmp/fcwad-perf.log pid=43841
+[fcwad-perf 21:33:25] event=ui.status_update duration_ms=0.08 status="Loading /mnt/userdata/Games/Quake/wads/makkon/makkon_concrete.wad..." tabs=0 open_wads=0
+[fcwad-perf 21:33:30] event=wad_view.refresh duration_ms=1260.61 reason=init wad=makkon_concrete.wad textures=1476 icon_size=128 columns=5 prior_tiles=0 clear_ms=0.01 layout_ms=1.03 thumb_ms=371.98 tile_build_ms=1258.05 thumb_errors=0
+[fcwad-perf 21:33:30] event=ui.status_update duration_ms=0.08 status="Loaded /mnt/userdata/Games/Quake/wads/makkon/makkon_concrete.wad with 1476 texture(s)" tabs=1 open_wads=1
+[fcwad-perf 21:33:30] event=ui.update_view_menu_state duration_ms=0.05 image_menu_state=disabled
+[fcwad-perf 21:33:30] event=ui.status_update duration_ms=0.03 status="Viewing makkon_concrete.wad (1476 textures)" tabs=1 open_wads=1
+[fcwad-perf 21:33:30] event=ui.tab_changed duration_ms=0.34 tab_kind=wad tab_name=makkon_concrete.wad textures=1476 notebook_tabs=1
+[fcwad-perf 21:33:32] event=wad_view.relayout duration_ms=191.62 reason=resize wad=makkon_concrete.wad textures=1476 icon_size=128 columns=12 relayout_ms=92.13 layout_ms=99.48
+[fcwad-perf 21:33:38] event=image_view.update duration_ms=8.04 reason=init texture=conc_c01_gry1 zoom=1.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=True image_prepare_ms=3.84 canvas_update_ms=3.99
+[fcwad-perf 21:33:38] event=ui.update_view_menu_state duration_ms=0.13 image_menu_state=normal
+[fcwad-perf 21:33:38] event=ui.status_update duration_ms=0.07 status="Viewing texture: conc_c01_gry1" tabs=2 open_wads=1
+[fcwad-perf 21:33:38] event=ui.update_view_menu_state duration_ms=0.08 image_menu_state=normal
+[fcwad-perf 21:33:38] event=ui.tab_changed duration_ms=0.28 tab_kind=image_or_other tab_name=conc_c01_gry1 textures=0 notebook_tabs=2
+[fcwad-perf 21:33:39] event=image_view.update duration_ms=26.81 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.50 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=17.01 canvas_update_ms=9.67
+[fcwad-perf 21:33:39] event=image_view.update duration_ms=295.25 reason=wheel_zoom texture=conc_c01_gry1 zoom=7.59 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=200.13 canvas_update_ms=95.00
+[fcwad-perf 21:33:40] event=image_view.update duration_ms=1166.29 reason=wheel_zoom texture=conc_c01_gry1 zoom=16.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=737.32 canvas_update_ms=428.76
+[fcwad-perf 21:33:40] event=image_view.update duration_ms=51.04 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=43.40 canvas_update_ms=7.58
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=16.19 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.40 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=8.98 canvas_update_ms=7.10
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=2.89 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.62 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=1.54 canvas_update_ms=1.29
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=1.41 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.42 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.47 canvas_update_ms=0.84
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=0.56 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.28 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.27 canvas_update_ms=0.24
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=0.98 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.42 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.43 canvas_update_ms=0.39
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=1.60 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.62 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.80 canvas_update_ms=0.74
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=5.42 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.94 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=2.58 canvas_update_ms=2.71
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=10.01 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.40 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=4.71 canvas_update_ms=5.23
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=23.80 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=11.73 canvas_update_ms=11.98
+[fcwad-perf 21:33:41] event=image_view.update duration_ms=58.16 reason=wheel_zoom texture=conc_c01_gry1 zoom=3.16 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=40.20 canvas_update_ms=17.87
+[fcwad-perf 21:33:42] event=image_view.update duration_ms=115.03 reason=wheel_zoom texture=conc_c01_gry1 zoom=4.74 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=61.24 canvas_update_ms=53.72
+[fcwad-perf 21:33:43] event=image_view.update duration_ms=1181.64 reason=wheel_zoom texture=conc_c01_gry1 zoom=16.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=729.21 canvas_update_ms=452.12
+[fcwad-perf 21:33:44] event=image_view.update duration_ms=546.25 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=346.37 canvas_update_ms=199.68
+[fcwad-perf 21:33:44] event=image_view.update duration_ms=22.65 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.40 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=18.97 canvas_update_ms=3.62
+[fcwad-perf 21:33:45] event=image_view.update duration_ms=24.38 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=11.34 canvas_update_ms=12.89
+[fcwad-perf 21:33:45] event=image_view.update duration_ms=43.92 reason=wheel_zoom texture=conc_c01_gry1 zoom=3.16 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=28.44 canvas_update_ms=15.40
+[fcwad-perf 21:33:45] event=image_view.update duration_ms=233.16 reason=wheel_zoom texture=conc_c01_gry1 zoom=7.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=148.66 canvas_update_ms=84.43
+[fcwad-perf 21:33:46] event=image_view.update duration_ms=1155.11 reason=wheel_zoom texture=conc_c01_gry1 zoom=16.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=713.83 canvas_update_ms=441.09
+[fcwad-perf 21:33:49] event=image_view.update duration_ms=598.45 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=408.12 canvas_update_ms=190.16
+[fcwad-perf 21:33:49] event=image_view.update duration_ms=23.11 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.40 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=19.38 canvas_update_ms=3.67
+[fcwad-perf 21:33:50] event=image_view.update duration_ms=39.32 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=25.10 canvas_update_ms=14.08
+[fcwad-perf 21:33:50] event=image_view.update duration_ms=119.16 reason=wheel_zoom texture=conc_c01_gry1 zoom=4.74 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=86.08 canvas_update_ms=33.02
+[fcwad-perf 21:33:51] event=image_view.update duration_ms=526.53 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=321.13 canvas_update_ms=205.34
+[fcwad-perf 21:33:52] event=image_view.update duration_ms=1194.78 reason=wheel_zoom texture=conc_c01_gry1 zoom=16.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=749.83 canvas_update_ms=444.73
+[fcwad-perf 21:33:54] event=image_view.update duration_ms=589.40 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=399.21 canvas_update_ms=190.13
+[fcwad-perf 21:33:54] event=image_view.update duration_ms=32.46 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=26.01 canvas_update_ms=6.24
+[fcwad-perf 21:33:55] event=image_view.update duration_ms=94.21 reason=wheel_zoom texture=conc_c01_gry1 zoom=3.16 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=58.48 canvas_update_ms=35.62
+[fcwad-perf 21:33:56] event=image_view.update duration_ms=146.97 reason=wheel_zoom texture=conc_c01_gry1 zoom=4.74 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=99.84 canvas_update_ms=47.04
+[fcwad-perf 21:33:57] event=image_view.update duration_ms=284.24 reason=wheel_zoom texture=conc_c01_gry1 zoom=7.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=180.52 canvas_update_ms=103.50
+[fcwad-perf 21:33:58] event=image_view.update duration_ms=573.39 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=371.65 canvas_update_ms=201.68
+[fcwad-perf 21:34:00] event=image_view.update duration_ms=1209.80 reason=wheel_zoom texture=conc_c01_gry1 zoom=16.00 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=740.57 canvas_update_ms=469.16
+[fcwad-perf 21:34:03] event=image_view.update duration_ms=589.62 reason=wheel_zoom texture=conc_c01_gry1 zoom=10.67 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=392.85 canvas_update_ms=196.69
+[fcwad-perf 21:34:03] event=image_view.update duration_ms=284.25 reason=wheel_zoom texture=conc_c01_gry1 zoom=7.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=185.92 canvas_update_ms=98.26
+[fcwad-perf 21:34:03] event=image_view.update duration_ms=102.43 reason=wheel_zoom texture=conc_c01_gry1 zoom=4.74 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=69.23 canvas_update_ms=33.14
+[fcwad-perf 21:34:03] event=image_view.update duration_ms=40.25 reason=wheel_zoom texture=conc_c01_gry1 zoom=3.16 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=24.62 canvas_update_ms=15.54
+[fcwad-perf 21:34:04] event=image_view.update duration_ms=37.87 reason=wheel_zoom texture=conc_c01_gry1 zoom=2.11 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=24.24 canvas_update_ms=13.38
+[fcwad-perf 21:34:04] event=image_view.update duration_ms=14.35 reason=wheel_zoom texture=conc_c01_gry1 zoom=1.40 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=7.40 canvas_update_ms=6.84
+[fcwad-perf 21:34:04] event=image_view.update duration_ms=4.70 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.94 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=2.41 canvas_update_ms=2.20
+[fcwad-perf 21:34:04] event=image_view.update duration_ms=2.51 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.62 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.97 canvas_update_ms=1.17
+[fcwad-perf 21:34:04] event=image_view.update duration_ms=1.43 reason=wheel_zoom texture=conc_c01_gry1 zoom=0.42 tile_columns=3 tile_rows=3 tiles=9 rebuilt_items=False image_prepare_ms=0.64 canvas_update_ms=0.72
+
+
+
+
+
+
+
+
 
 
 
